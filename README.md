@@ -2,6 +2,8 @@
 
 A lightweight, fast desktop client for experimenting with OpenAI-compatible APIs. Built with [egui](https://github.com/emilk/egui) for native performance and [CommonMark](https://commonmark.org/) support.
 
+<img src="docs/screenshot.png" />
+
 ## Features
 
 - 🚀 Fast native performance with egui
