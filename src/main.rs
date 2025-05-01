@@ -3,7 +3,7 @@ use eframe::egui;
 use egui_commonmark::{CommonMarkViewer, CommonMarkCache};
 use std::sync::mpsc::{channel, Receiver, Sender};
 
-const APP_NAME: &str = "OpenAI Chat";
+const APP_NAME: &str = "MD Chat";
 
 // Add your preferred models here
 const AVAILABLE_MODELS: &[&str] = &[
