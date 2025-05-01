@@ -7,6 +7,7 @@ struct MyApp {
     markdown_text: String,
     cache: CommonMarkCache,
     window_info: Option<egui::ViewportInfo>,
+    dark_mode: bool,
 }
 
 impl MyApp {
@@ -22,10 +23,27 @@ impl MyApp {
             None
         };
 
+        // Try to load theme preference, default to dark mode
+        let dark_mode = if let Some(storage) = cc.storage {
+            storage.get_string("dark_mode")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(true)
+        } else {
+            true
+        };
+
+        // Set the initial theme
+        cc.egui_ctx.set_visuals(if dark_mode {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        });
+
         Self {
             markdown_text,
             cache: CommonMarkCache::default(),
             window_info,
+            dark_mode,
         }
     }
 }
@@ -35,6 +53,25 @@ impl eframe::App for MyApp {
         // Store current window info
         self.window_info = Some(ctx.input(|i| i.viewport().clone()));
         
+        // Add top panel with theme toggle
+        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let theme_btn = ui.button(if self.dark_mode { "☀ Light" } else { "🌙 Dark" });
+                    if theme_btn.clicked() {
+                        self.dark_mode = !self.dark_mode;
+                        ctx.set_visuals(if self.dark_mode {
+                            egui::Visuals::dark()
+                        } else {
+                            egui::Visuals::light()
+                        });
+                    }
+                });
+            });
+            ui.add_space(4.0);
+        });
+
         egui::CentralPanel::default().show(ctx, |ui| {
             // Make the area scrollable in case content is long
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -45,11 +82,15 @@ impl eframe::App for MyApp {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        // Save window info
         if let Some(window_info) = &self.window_info {
             if let Ok(json) = serde_json::to_string(window_info) {
                 storage.set_string("window_info", json);
             }
         }
+        
+        // Save theme preference
+        storage.set_string("dark_mode", self.dark_mode.to_string());
     }
 
     fn persist_egui_memory(&self) -> bool {
