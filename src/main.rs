@@ -3,6 +3,8 @@ use eframe::egui;
 use egui_commonmark::{CommonMarkViewer, CommonMarkCache};
 use std::sync::mpsc::{channel, Receiver, Sender};
 
+const APP_NAME: &str = "OpenAI Chat";
+
 mod openai;
 use openai::{ChatCompletionMessage, ChatCompletionRequest, ChatCompletionResponse, Role};
 
@@ -171,7 +173,7 @@ fn main() {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([800.0, 600.0])
             .with_position([50.0, 50.0])
-            .with_app_id("md-chat")
+            .with_app_id(APP_NAME)
             .with_min_inner_size([400.0, 300.0])
             .with_resizable(true),
         centered: true,
@@ -179,7 +181,7 @@ fn main() {
     };
 
     eframe::run_native(
-        "OpenAI Chat",
+        APP_NAME,
         native_options,
         Box::new(|cc| Ok(Box::new(MyApp::new(cc)))),
     )
