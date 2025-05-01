@@ -5,6 +5,13 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 
 const APP_NAME: &str = "OpenAI Chat";
 
+// Add your preferred models here
+const AVAILABLE_MODELS: &[&str] = &[
+    "gpt-4.1",
+    "gpt-4o-mini",
+    "gpt-4o",
+];
+
 mod openai;
 use openai::{ChatCompletionMessage, ChatCompletionRequest, ChatCompletionResponse, Role};
 
@@ -23,6 +30,7 @@ struct MyApp {
     request_tx: Sender<String>,
     is_processing: bool,
     markdown_cache: CommonMarkCache,
+    selected_model: String,
 }
 
 impl MyApp {
@@ -39,8 +47,9 @@ impl MyApp {
             let rt = tokio::runtime::Runtime::new().unwrap();
             while let Ok(message) = request_rx.recv() {
                 let tx = response_tx.clone();
+                let (content, model) = message.split_once('\0').unwrap();
                 rt.block_on(async {
-                    let result = openai::send_openai_request(&message).await;
+                    let result = openai::send_openai_request(content, model).await;
                     tx.send(result).unwrap();
                 });
             }
@@ -55,6 +64,7 @@ impl MyApp {
             request_tx,
             is_processing: false,
             markdown_cache: CommonMarkCache::default(),
+            selected_model: AVAILABLE_MODELS[0].to_string(),
         };
 
         // Add initial system message
@@ -99,6 +109,16 @@ impl eframe::App for MyApp {
                         ctx.set_visuals(egui::Visuals::light());
                     }
                 }
+                
+                ui.separator();
+                
+                egui::ComboBox::from_label("Model")
+                    .selected_text(&self.selected_model)
+                    .show_ui(ui, |ui| {
+                        for model in AVAILABLE_MODELS {
+                            ui.selectable_value(&mut self.selected_model, model.to_string(), *model);
+                        }
+                    });
             });
         });
 
@@ -117,7 +137,9 @@ impl eframe::App for MyApp {
                             role: Role::User,
                             content: message.clone(),
                         });
-                        self.request_tx.send(message).unwrap();
+                        // Combine message and model with a null byte separator
+                        let request = format!("{}\0{}", message, self.selected_model);
+                        self.request_tx.send(request).unwrap();
                         self.is_processing = true;
                     }
                 }

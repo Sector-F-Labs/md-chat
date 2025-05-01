@@ -39,7 +39,7 @@ pub struct ChatCompletionMessageResponse {
     pub content: String,
 }
 
-pub async fn send_openai_request(message: &str) -> Result<String, String> {
+pub async fn send_openai_request(message: &str, model: &str) -> Result<String, String> {
     let api_key = env::var("OPENAI_API_KEY")
         .map_err(|_| "OPENAI_API_KEY environment variable not set")?;
     
@@ -47,7 +47,7 @@ pub async fn send_openai_request(message: &str) -> Result<String, String> {
 
     let client = reqwest::Client::new();
     let request = ChatCompletionRequest {
-        model: "gpt-4.1".to_string(),
+        model: model.to_string(),
         messages: vec![
             ChatCompletionMessage {
                 role: Role::System,
