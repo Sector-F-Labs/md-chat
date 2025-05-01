@@ -10,7 +10,7 @@ A lightweight, fast desktop client for experimenting with OpenAI-compatible APIs
 - 📝 Full Markdown rendering support
 - 🌓 Light/Dark mode toggle
 - 💾 Persistent window position
-- 🔄 Compatible with OpenAI and similar APIs (like Reservoir)
+- 🔄 Compatible with OpenAI and similar APIs (like [Reservoir](https://github.com/Sector-F-Labs/reservoir))
 - 🎨 Clean, minimal interface
 
 ## Configuration
