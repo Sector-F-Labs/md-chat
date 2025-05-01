@@ -1,49 +1,14 @@
 // main.rs
 use eframe::egui;
 use egui_commonmark::{CommonMarkViewer, CommonMarkCache};
-use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::env;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum Role {
-    System,
-    User,
-    Assistant,
-}
+mod openai;
+use openai::{ChatCompletionMessage, ChatCompletionRequest, ChatCompletionResponse, Role};
 
 #[derive(Debug)]
 struct ChatMessage {
     role: Role,
-    content: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ChatCompletionRequest {
-    model: String,
-    messages: Vec<ChatCompletionMessage>,
-    temperature: f32,
-}
-
-#[derive(Debug, Serialize)]
-struct ChatCompletionMessage {
-    role: Role,
-    content: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatCompletionResponse {
-    choices: Vec<ChatCompletionChoice>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatCompletionChoice {
-    message: ChatCompletionMessageResponse,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatCompletionMessageResponse {
     content: String,
 }
 
@@ -73,7 +38,7 @@ impl MyApp {
             while let Ok(message) = request_rx.recv() {
                 let tx = response_tx.clone();
                 rt.block_on(async {
-                    let result = Self::send_openai_request(&message).await;
+                    let result = openai::send_openai_request(&message).await;
                     tx.send(result).unwrap();
                 });
             }
@@ -116,45 +81,7 @@ impl MyApp {
         self.is_processing = true;
     }
 
-    async fn send_openai_request(message: &str) -> Result<String, String> {
-        let api_key = env::var("OPENAI_API_KEY")
-            .map_err(|_| "OPENAI_API_KEY environment variable not set")?;
-
-        let client = reqwest::Client::new();
-        let request = ChatCompletionRequest {
-            model: "gpt-3.5-turbo".to_string(),
-            messages: vec![
-                ChatCompletionMessage {
-                    role: Role::System,
-                    content: "You are a helpful assistant. You can use markdown formatting in your responses.".to_string(),
-                },
-                ChatCompletionMessage {
-                    role: Role::User,
-                    content: message.to_string(),
-                },
-            ],
-            temperature: 0.7,
-        };
-
-        let response = client
-            .post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", api_key))
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let completion: ChatCompletionResponse = response
-            .json()
-            .await
-            .map_err(|e| e.to_string())?;
-
-        completion
-            .choices
-            .first()
-            .map(|choice| choice.message.content.clone())
-            .ok_or_else(|| "No response from OpenAI".to_string())
-    }
+    
 }
 
 impl eframe::App for MyApp {
