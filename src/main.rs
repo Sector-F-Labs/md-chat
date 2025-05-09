@@ -130,17 +130,22 @@ impl eframe::App for MyApp {
         // Bottom panel for input
         egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                let text_edit = ui.text_edit_multiline(&mut self.input);
+                // Make the text input take up as much width as possible
+                let available_width = ui.available_width();
+                let button_width = 80.0; // Reserve space for the button
+                let text_edit = ui.add_sized([
+                    available_width - button_width,
+                    60.0 // or your preferred height
+                ], egui::TextEdit::multiline(&mut self.input));
                 text_edit.request_focus();
 
                 if self.is_processing {
                     ui.add(egui::Spinner::new());
                 }
 
-                // Get the height of the text_edit for button sizing
                 let text_edit_height = text_edit.rect.height();
                 let send_button = egui::Button::new(if self.is_processing { "..." } else { "Send" })
-                    .min_size(egui::vec2(60.0, text_edit_height));
+                    .min_size(egui::vec2(button_width, text_edit_height));
                 if ui.add(send_button).clicked()
                     || (ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift))
                 {
