@@ -8,6 +8,12 @@ pub enum Role {
     Assistant,
 }
 
+impl Default for Role {
+    fn default() -> Self {
+        Role::User
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct ChatCompletionRequest {
     pub model: String,

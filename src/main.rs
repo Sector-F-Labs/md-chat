@@ -9,6 +9,8 @@ use dirs;
 use std::fs;
 use std::path::PathBuf;
 use serde::{Serialize, Deserialize};
+use serde_json;
+use whoami;
 
 const APP_NAME: &str = "MD-Chat";
 
@@ -21,6 +23,12 @@ const AVAILABLE_MODELS: &[&str] = &[
 
 mod openai;
 use openai::Role;
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+struct ChatMessage {
+    role: Role,
+    content: String,
+}
 
 #[derive(Serialize, Deserialize, Debug, Default)]
 struct AppConfig {
@@ -57,12 +65,6 @@ fn load_or_create_config() -> AppConfig {
 }
 
 #[allow(dead_code)]
-struct ChatMessage {
-    role: Role,
-    content: String,
-}
-
-#[allow(dead_code)]
 struct MyApp {
     dark_mode: bool,
     messages: Vec<ChatMessage>,
@@ -73,6 +75,19 @@ struct MyApp {
     is_processing: bool,
     markdown_cache: CommonMarkCache,
     selected_model: String,
+}
+
+async fn fetch_history() -> Result<Vec<ChatMessage>, String> {
+    let username = whoami::username();
+    let url = format!("http://localhost:3017/v1/partition/{}/instance/reservoir/view/4", username);
+    let client = reqwest::Client::new();
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let text = response.text().await.map_err(|e| e.to_string())?;
+    serde_json::from_str(&text).map_err(|e| e.to_string())
 }
 
 #[allow(dead_code)]
@@ -102,9 +117,22 @@ impl MyApp {
             }
         });
 
+        // Fetch history synchronously
+        let mut messages = Vec::new();
+        // Add initial system message
+        messages.push(ChatMessage {
+            role: Role::System,
+            content: "You are a helpful assistant. You can use markdown formatting in your responses.".to_string(),
+        });
+        // Fetch history and append
+        if let Ok(rt) = tokio::runtime::Runtime::new() {
+            if let Ok(history) = rt.block_on(fetch_history()) {
+                messages.extend(history);
+            }
+        }
         let mut app = Self {
             dark_mode: true,
-            messages: Vec::new(),
+            messages,
             input: String::new(),
             http_client,
             response_rx,
@@ -113,13 +141,6 @@ impl MyApp {
             markdown_cache: CommonMarkCache::default(),
             selected_model: AVAILABLE_MODELS[0].to_string(),
         };
-
-        // Add initial system message
-        app.messages.push(ChatMessage {
-            role: Role::System,
-            content: "You are a helpful assistant. You can use markdown formatting in your responses.".to_string(),
-        });
-
         app
     }
 
