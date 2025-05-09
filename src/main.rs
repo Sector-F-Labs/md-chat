@@ -137,8 +137,12 @@ impl eframe::App for MyApp {
                     ui.add(egui::Spinner::new());
                 }
 
-                if ui.button(if self.is_processing { "..." } else { "Send" }).clicked() 
-                    || (ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift)) 
+                // Get the height of the text_edit for button sizing
+                let text_edit_height = text_edit.rect.height();
+                let send_button = egui::Button::new(if self.is_processing { "..." } else { "Send" })
+                    .min_size(egui::vec2(60.0, text_edit_height));
+                if ui.add(send_button).clicked()
+                    || (ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift))
                 {
                     if !self.input.trim().is_empty() && !self.is_processing {
                         let message = std::mem::take(&mut self.input);
