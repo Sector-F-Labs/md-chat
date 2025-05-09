@@ -10,6 +10,9 @@ all: bundle
 build:
 	cargo build --release
 
+dev:
+	cargo watch -x run
+
 icon:
 	bash docs/make-icon.sh
 

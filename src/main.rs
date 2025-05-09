@@ -160,8 +160,16 @@ impl eframe::App for MyApp {
             egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
                 for message in &self.messages {
                     ui.group(|ui| {
-                        let viewer = CommonMarkViewer::new();
-                        viewer.show(ui, &mut self.markdown_cache, &message.content);
+                        ui.horizontal(|ui| {
+                            // Copy button first, aligned to top right
+                            if ui.button("Copy").on_hover_text("Copy entire message markdown").clicked() {
+                                ui.output_mut(|o| o.copied_text = message.content.clone());
+                            }
+                            // Add some spacing between the button and the text
+                            ui.add_space(4.0);
+                            let viewer = CommonMarkViewer::new();
+                            viewer.show(ui, &mut self.markdown_cache, &message.content);
+                        });
                     });
                     ui.add_space(8.0);
                 }
