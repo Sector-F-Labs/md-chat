@@ -133,6 +133,10 @@ impl eframe::App for MyApp {
                 let text_edit = ui.text_edit_multiline(&mut self.input);
                 text_edit.request_focus();
 
+                if self.is_processing {
+                    ui.add(egui::Spinner::new());
+                }
+
                 if ui.button(if self.is_processing { "..." } else { "Send" }).clicked() 
                     || (ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift)) 
                 {
