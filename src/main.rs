@@ -2,8 +2,11 @@
 use eframe::egui;
 use egui_commonmark::{CommonMarkViewer, CommonMarkCache};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use eframe::egui::{IconData, ViewportBuilder};
+use std::sync::Arc;
+use image;
 
-const APP_NAME: &str = "MD Chat";
+const APP_NAME: &str = "MD-Chat";
 
 // Add your preferred models here
 const AVAILABLE_MODELS: &[&str] = &[
@@ -13,14 +16,15 @@ const AVAILABLE_MODELS: &[&str] = &[
 ];
 
 mod openai;
-use openai::{ChatCompletionMessage, ChatCompletionRequest, ChatCompletionResponse, Role};
+use openai::Role;
 
-#[derive(Debug)]
+#[allow(dead_code)]
 struct ChatMessage {
     role: Role,
     content: String,
 }
 
+#[allow(dead_code)]
 struct MyApp {
     dark_mode: bool,
     messages: Vec<ChatMessage>,
@@ -33,8 +37,9 @@ struct MyApp {
     selected_model: String,
 }
 
+#[allow(dead_code)]
 impl MyApp {
-    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         // Initialize HTTP client
         let http_client = reqwest::Client::new();
         
@@ -151,7 +156,7 @@ impl eframe::App for MyApp {
             egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
                 for message in &self.messages {
                     ui.group(|ui| {
-                        let mut viewer = CommonMarkViewer::new();
+                        let viewer = CommonMarkViewer::new();
                         viewer.show(ui, &mut self.markdown_cache, &message.content);
                     });
                     ui.add_space(8.0);
@@ -189,23 +194,38 @@ impl eframe::App for MyApp {
     }
 }
 
-fn main() {
+fn main() -> eframe::Result<()> {
+    // Load the icon image
+    let icon_bytes = include_bytes!("../assets/icon.iconset/icon_256x256.png");
+    let image = image::load_from_memory(icon_bytes)
+        .expect("Failed to load icon")
+        .into_rgba8();
+    let (width, height) = image.dimensions();
+    let icon_rgba = image.into_raw();
+    let icon_data = IconData {
+        rgba: icon_rgba,
+        width,
+        height,
+    };
+
+    // Set up native options with the icon
     let native_options = eframe::NativeOptions {
         persist_window: true,
-        viewport: egui::ViewportBuilder::default()
+        viewport: ViewportBuilder::default()
             .with_inner_size([800.0, 600.0])
             .with_position([50.0, 50.0])
             .with_app_id(APP_NAME)
             .with_min_inner_size([400.0, 300.0])
-            .with_resizable(true),
+            .with_resizable(true)
+            .with_icon(Arc::new(icon_data)),
         centered: true,
         ..Default::default()
     };
 
+    // Run the application
     eframe::run_native(
         APP_NAME,
         native_options,
         Box::new(|cc| Ok(Box::new(MyApp::new(cc)))),
     )
-    .expect("Failed to launch application");
 }
