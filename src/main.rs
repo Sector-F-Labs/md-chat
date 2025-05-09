@@ -75,11 +75,12 @@ struct MyApp {
     is_processing: bool,
     markdown_cache: CommonMarkCache,
     selected_model: String,
+    history_rx: Option<Receiver<Result<Vec<ChatMessage>, String>>>,
 }
 
 async fn fetch_history() -> Result<Vec<ChatMessage>, String> {
     let username = whoami::username();
-    let url = format!("http://localhost:3017/v1/partition/{}/instance/reservoir/view/4", username);
+    let url = format!("http://localhost:3017/v1/partition/{}/instance/reservoir/view/10", username);
     let client = reqwest::Client::new();
     let response = client
         .get(url)
@@ -130,7 +131,7 @@ impl MyApp {
                 messages.extend(history);
             }
         }
-        let mut app = Self {
+        Self {
             dark_mode: true,
             messages,
             input: String::new(),
@@ -140,8 +141,8 @@ impl MyApp {
             is_processing: false,
             markdown_cache: CommonMarkCache::default(),
             selected_model: AVAILABLE_MODELS[0].to_string(),
-        };
-        app
+            history_rx: None,
+        }
     }
 
     fn send_message(&mut self) {
@@ -161,7 +162,19 @@ impl MyApp {
         self.is_processing = true;
     }
 
-    
+    fn refresh_history(&mut self) {
+        if self.is_processing {
+            return;
+        }
+        self.is_processing = true;
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let result = rt.block_on(fetch_history());
+            tx.send(result).unwrap();
+        });
+        self.history_rx = Some(rx);
+    }
 }
 
 impl eframe::App for MyApp {
@@ -177,9 +190,13 @@ impl eframe::App for MyApp {
                         ctx.set_visuals(egui::Visuals::light());
                     }
                 }
-                
                 ui.separator();
-                
+                if ui.button("🔄 Refresh").on_hover_text("Fetch history").clicked() && !self.is_processing {
+                    self.refresh_history();
+                }
+                if self.is_processing {
+                    ui.add(egui::Spinner::new());
+                }
                 egui::ComboBox::from_label("Model")
                     .selected_text(&self.selected_model)
                     .show_ui(ui, |ui| {
@@ -247,6 +264,29 @@ impl eframe::App for MyApp {
                 }
             });
         });
+
+        // Check for history refresh result
+        if let Some(rx) = &self.history_rx {
+            if let Ok(result) = rx.try_recv() {
+                match result {
+                    Ok(history) => {
+                        // Keep the system message, replace the rest
+                        if !self.messages.is_empty() {
+                            self.messages.truncate(1);
+                        }
+                        self.messages.extend(history);
+                    }
+                    Err(error) => {
+                        self.messages.push(ChatMessage {
+                            role: Role::System,
+                            content: format!("Error fetching history: {}", error),
+                        });
+                    }
+                }
+                self.is_processing = false;
+                self.history_rx = None;
+            }
+        }
 
         // Check for responses
         if let Ok(response) = self.response_rx.try_recv() {
