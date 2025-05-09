@@ -5,6 +5,10 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use eframe::egui::{IconData, ViewportBuilder};
 use std::sync::Arc;
 use image;
+use dirs;
+use std::fs;
+use std::path::PathBuf;
+use serde::{Serialize, Deserialize};
 
 const APP_NAME: &str = "MD-Chat";
 
@@ -17,6 +21,40 @@ const AVAILABLE_MODELS: &[&str] = &[
 
 mod openai;
 use openai::Role;
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+struct AppConfig {
+    openai_api_key: Option<String>,
+    api_url: String,
+}
+
+fn get_config_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|dir| dir.join("MD-Chat").join("config.toml"))
+}
+
+fn load_or_create_config() -> AppConfig {
+    let default_config = AppConfig {
+        openai_api_key: None,
+        api_url: "https://api.openai.com/v1/chat/completions".to_string(),
+    };
+    if let Some(path) = get_config_path() {
+        if !path.exists() {
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let toml_str = toml::to_string_pretty(&default_config).unwrap();
+            let _ = fs::write(&path, toml_str);
+            return default_config;
+        }
+        if let Ok(contents) = fs::read_to_string(&path) {
+            toml::from_str(&contents).unwrap_or(default_config)
+        } else {
+            default_config
+        }
+    } else {
+        default_config
+    }
+}
 
 #[allow(dead_code)]
 struct ChatMessage {
@@ -40,6 +78,8 @@ struct MyApp {
 #[allow(dead_code)]
 impl MyApp {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        // Load or create config
+        let config = load_or_create_config();
         // Initialize HTTP client
         let http_client = reqwest::Client::new();
         
@@ -53,8 +93,10 @@ impl MyApp {
             while let Ok(message) = request_rx.recv() {
                 let tx = response_tx.clone();
                 let (content, model) = message.split_once('\0').unwrap();
+                let api_key = config.openai_api_key.as_deref().unwrap_or("");
+                let api_url = &config.api_url;
                 rt.block_on(async {
-                    let result = openai::send_openai_request(content, model).await;
+                    let result = openai::send_openai_request(content, model, api_key, api_url).await;
                     tx.send(result).unwrap();
                 });
             }

@@ -1,7 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::env;
-
-const DEFAULT_API_URL: &str = "https://api.openai.com/v1/chat/completions";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -39,12 +36,12 @@ pub struct ChatCompletionMessageResponse {
     pub content: String,
 }
 
-pub async fn send_openai_request(message: &str, model: &str) -> Result<String, String> {
-    let api_key = env::var("OPENAI_API_KEY")
-        .map_err(|_| "OPENAI_API_KEY environment variable not set")?;
-    
-    let api_url = env::var("OPENAI_API_URL").unwrap_or_else(|_| DEFAULT_API_URL.to_string());
-
+pub async fn send_openai_request(
+    message: &str,
+    model: &str,
+    api_key: &str,
+    api_url: &str,
+) -> Result<String, String> {
     let client = reqwest::Client::new();
     let request = ChatCompletionRequest {
         model: model.to_string(),

@@ -15,15 +15,21 @@ A lightweight, fast desktop client for experimenting with OpenAI-compatible APIs
 ![Screenshot](docs/screenshot.png)
 ## Configuration
 
-The application uses environment variables for configuration:
+MD-Chat uses a TOML config file for settings such as your OpenAI API key and API URL. **Environment variables are no longer required.**
 
-```bash
-# Required: Your API key
-export OPENAI_API_KEY="your-api-key"
+### Config File Location
+- **macOS:** `~/Library/Application Support/MD-Chat/config.toml`
+- **Linux:** `~/.config/MD-Chat/config.toml`
 
-# Optional: Custom API endpoint (defaults to OpenAI)
-export OPENAI_API_URL="https://your-api-endpoint/v1/chat/completions"
+The config file is created automatically on first run if it does not exist.
+
+### Example `config.toml`
+```toml
+openai_api_key = "sk-...yourkey..."
+api_url = "https://api.openai.com/v1/chat/completions"
 ```
+- If `openai_api_key` is missing or empty, requests will fail unless the API does not require a key.
+- You can edit this file to change your API key or use a different API URL.
 
 ## Building and Running
 
@@ -37,11 +43,10 @@ cargo run --release
 
 ## Usage
 
-1. Configure your environment variables
-2. Launch the application
-3. Type your message in the input box
-4. Press Enter or click Send to submit
-5. View the markdown-formatted response
+1. Launch the application
+2. Type your message in the input box
+3. Press Enter or click Send to submit
+4. View the markdown-formatted response
 
 ## Development
 
