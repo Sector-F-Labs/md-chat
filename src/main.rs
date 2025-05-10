@@ -40,10 +40,14 @@ fn get_config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|dir| dir.join("MD-Chat").join("config.toml"))
 }
 
+fn get_completions_url(base_url: &str) -> String {
+    format!("{}/v1/chat/completions", base_url)
+}
+
 fn load_or_create_config() -> AppConfig {
     let default_config = AppConfig {
         openai_api_key: None,
-        api_url: "https://api.openai.com/v1/chat/completions".to_string(),
+        api_url: "https://api.openai.com".to_string(),
     };
     if let Some(path) = get_config_path() {
         if !path.exists() {
@@ -80,7 +84,7 @@ struct MyApp {
 
 async fn fetch_history() -> Result<Vec<ChatMessage>, String> {
     let username = whoami::username();
-    let url = format!("http://localhost:3017/v1/partition/{}/instance/reservoir/view/10", username);
+    let url = format!("http://localhost:3017/v1/partition/{}/instance/reservoir/command/view/15", username);
     let client = reqwest::Client::new();
     let response = client
         .get(url)
@@ -110,9 +114,9 @@ impl MyApp {
                 let tx = response_tx.clone();
                 let (content, model) = message.split_once('\0').unwrap();
                 let api_key = config.openai_api_key.as_deref().unwrap_or("");
-                let api_url = &config.api_url;
+                let api_url = get_completions_url(&config.api_url);
                 rt.block_on(async {
-                    let result = openai::send_openai_request(content, model, api_key, api_url).await;
+                    let result = openai::send_openai_request(content, model, api_key, api_url.as_str()).await;
                     tx.send(result).unwrap();
                 });
             }
