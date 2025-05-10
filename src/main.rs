@@ -1,25 +1,21 @@
 // main.rs
-use eframe::egui;
-use egui_commonmark::{CommonMarkViewer, CommonMarkCache};
-use std::sync::mpsc::{channel, Receiver, Sender};
-use eframe::egui::{IconData, ViewportBuilder};
-use std::sync::Arc;
-use image;
 use dirs;
+use eframe::egui;
+use eframe::egui::{IconData, ViewportBuilder};
+use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
+use image;
+use serde::{Deserialize, Serialize};
+use serde_json;
 use std::fs;
 use std::path::PathBuf;
-use serde::{Serialize, Deserialize};
-use serde_json;
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender, channel};
 use whoami;
 
 const APP_NAME: &str = "MD-Chat";
 
 // Add your preferred models here
-const AVAILABLE_MODELS: &[&str] = &[
-    "gpt-4.1",
-    "gpt-4o-mini",
-    "gpt-4o",
-];
+const AVAILABLE_MODELS: &[&str] = &["gpt-4.1", "gpt-4o-mini", "gpt-4o", "gemini-2.0-flash"];
 
 mod openai;
 use openai::Role;
@@ -84,13 +80,12 @@ struct MyApp {
 
 async fn fetch_history() -> Result<Vec<ChatMessage>, String> {
     let username = whoami::username();
-    let url = format!("http://localhost:3017/partition/{}/instance/reservoir/command/view/15", username);
+    let url = format!(
+        "http://localhost:3017/partition/{}/instance/reservoir/command/view/15",
+        username
+    );
     let client = reqwest::Client::new();
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let response = client.get(url).send().await.map_err(|e| e.to_string())?;
     let text = response.text().await.map_err(|e| e.to_string())?;
     serde_json::from_str(&text).map_err(|e| e.to_string())
 }
@@ -102,10 +97,13 @@ impl MyApp {
         let config = load_or_create_config();
         // Initialize HTTP client
         let http_client = reqwest::Client::new();
-        
+
         // Set up channels for async communication
         let (request_tx, request_rx): (Sender<String>, Receiver<String>) = channel();
-        let (response_tx, response_rx): (Sender<Result<String, String>>, Receiver<Result<String, String>>) = channel();
+        let (response_tx, response_rx): (
+            Sender<Result<String, String>>,
+            Receiver<Result<String, String>>,
+        ) = channel();
 
         // Spawn background thread for handling API requests
         std::thread::spawn(move || {
@@ -116,7 +114,9 @@ impl MyApp {
                 let api_key = config.openai_api_key.as_deref().unwrap_or("");
                 let api_url = get_completions_url(&config.api_url);
                 rt.block_on(async {
-                    let result = openai::send_openai_request(content, model, api_key, api_url.as_str()).await;
+                    let result =
+                        openai::send_openai_request(content, model, api_key, api_url.as_str())
+                            .await;
                     tx.send(result).unwrap();
                 });
             }
@@ -127,7 +127,9 @@ impl MyApp {
         // Add initial system message
         messages.push(ChatMessage {
             role: Role::System,
-            content: "You are a helpful assistant. You can use markdown formatting in your responses.".to_string(),
+            content:
+                "You are a helpful assistant. You can use markdown formatting in your responses."
+                    .to_string(),
         });
         // Fetch history and append
         if let Ok(rt) = tokio::runtime::Runtime::new() {
@@ -159,7 +161,7 @@ impl MyApp {
             content: self.input.clone(),
         };
         self.messages.push(message);
-        
+
         // Send request
         self.request_tx.send(self.input.clone()).ok();
         self.input.clear();
@@ -195,7 +197,12 @@ impl eframe::App for MyApp {
                     }
                 }
                 ui.separator();
-                if ui.button("🔄 Refresh").on_hover_text("Fetch history").clicked() && !self.is_processing {
+                if ui
+                    .button("🔄 Refresh")
+                    .on_hover_text("Fetch history")
+                    .clicked()
+                    && !self.is_processing
+                {
                     self.refresh_history();
                 }
                 if self.is_processing {
@@ -205,7 +212,11 @@ impl eframe::App for MyApp {
                     .selected_text(&self.selected_model)
                     .show_ui(ui, |ui| {
                         for model in AVAILABLE_MODELS {
-                            ui.selectable_value(&mut self.selected_model, model.to_string(), *model);
+                            ui.selectable_value(
+                                &mut self.selected_model,
+                                model.to_string(),
+                                *model,
+                            );
                         }
                     });
             });
@@ -217,10 +228,13 @@ impl eframe::App for MyApp {
                 // Make the text input take up as much width as possible
                 let available_width = ui.available_width();
                 let button_width = 80.0; // Reserve space for the button
-                let text_edit = ui.add_sized([
-                    available_width - button_width,
-                    60.0 // or your preferred height
-                ], egui::TextEdit::multiline(&mut self.input));
+                let text_edit = ui.add_sized(
+                    [
+                        available_width - button_width,
+                        60.0, // or your preferred height
+                    ],
+                    egui::TextEdit::multiline(&mut self.input),
+                );
                 text_edit.request_focus();
 
                 if self.is_processing {
@@ -228,8 +242,9 @@ impl eframe::App for MyApp {
                 }
 
                 let text_edit_height = text_edit.rect.height();
-                let send_button = egui::Button::new(if self.is_processing { "..." } else { "Send" })
-                    .min_size(egui::vec2(button_width, text_edit_height));
+                let send_button =
+                    egui::Button::new(if self.is_processing { "..." } else { "Send" })
+                        .min_size(egui::vec2(button_width, text_edit_height));
                 if ui.add(send_button).clicked()
                     || (ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift))
                 {
@@ -250,23 +265,29 @@ impl eframe::App for MyApp {
 
         // Central panel for messages
         egui::CentralPanel::default().show(ctx, |ui| {
-            egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
-                for message in &self.messages {
-                    ui.group(|ui| {
-                        ui.horizontal(|ui| {
-                            // Copy button first, aligned to top right
-                            if ui.button("Copy").on_hover_text("Copy entire message markdown").clicked() {
-                                ui.output_mut(|o| o.copied_text = message.content.clone());
-                            }
-                            // Add some spacing between the button and the text
-                            ui.add_space(4.0);
-                            let viewer = CommonMarkViewer::new();
-                            viewer.show(ui, &mut self.markdown_cache, &message.content);
+            egui::ScrollArea::vertical()
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    for message in &self.messages {
+                        ui.group(|ui| {
+                            ui.horizontal(|ui| {
+                                // Copy button first, aligned to top right
+                                if ui
+                                    .button("Copy")
+                                    .on_hover_text("Copy entire message markdown")
+                                    .clicked()
+                                {
+                                    ui.output_mut(|o| o.copied_text = message.content.clone());
+                                }
+                                // Add some spacing between the button and the text
+                                ui.add_space(4.0);
+                                let viewer = CommonMarkViewer::new();
+                                viewer.show(ui, &mut self.markdown_cache, &message.content);
+                            });
                         });
-                    });
-                    ui.add_space(8.0);
-                }
-            });
+                        ui.add_space(8.0);
+                    }
+                });
         });
 
         // Check for history refresh result
