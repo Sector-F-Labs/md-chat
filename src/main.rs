@@ -11,7 +11,6 @@ use std::path::PathBuf;
 use serde::{Serialize, Deserialize};
 use serde_json;
 use whoami;
-use urlencoding;
 
 const APP_NAME: &str = "MD-Chat";
 
@@ -77,13 +76,11 @@ struct MyApp {
     markdown_cache: CommonMarkCache,
     selected_model: String,
     history_rx: Option<Receiver<Result<Vec<ChatMessage>, String>>>,
-    search_term: String,
-    search_rx: Option<Receiver<Result<Vec<ChatMessage>, String>>>,
 }
 
 async fn fetch_history() -> Result<Vec<ChatMessage>, String> {
     let username = whoami::username();
-    let url = format!("http://localhost:3017/v1/partition/{}/instance/reservoir/view/20", username);
+    let url = format!("http://localhost:3017/v1/partition/{}/instance/reservoir/view/10", username);
     let client = reqwest::Client::new();
     let response = client
         .get(url)
@@ -145,8 +142,6 @@ impl MyApp {
             markdown_cache: CommonMarkCache::default(),
             selected_model: AVAILABLE_MODELS[0].to_string(),
             history_rx: None,
-            search_term: String::new(),
-            search_rx: None,
         }
     }
 
@@ -180,36 +175,11 @@ impl MyApp {
         });
         self.history_rx = Some(rx);
     }
-
-    fn search_and_populate(&mut self) {
-        if self.is_processing || self.search_term.trim().is_empty() {
-            return;
-        }
-        self.is_processing = true;
-        let term = self.search_term.clone();
-        let (tx, rx) = channel();
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            let username = whoami::username();
-            let url = format!(
-                "http://localhost:3017/v1/partition/{}/instance/reservoir/search/10?term={}&semantic=false",
-                username, urlencoding::encode(&term)
-            );
-            let client = reqwest::Client::new();
-            let result = rt.block_on(async {
-                let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
-                let text = resp.text().await.map_err(|e| e.to_string())?;
-                serde_json::from_str::<Vec<ChatMessage>>(&text).map_err(|e| e.to_string())
-            });
-            tx.send(result).unwrap();
-        });
-        self.search_rx = Some(rx);
-    }
 }
 
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Top panel for theme toggle and search
+        // Top panel for theme toggle
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button(if self.dark_mode { "🌙" } else { "☀" }).clicked() {
@@ -234,16 +204,6 @@ impl eframe::App for MyApp {
                             ui.selectable_value(&mut self.selected_model, model.to_string(), *model);
                         }
                     });
-                // Search box and button
-                ui.separator();
-                ui.label("Search:");
-                let search_edit = ui.text_edit_singleline(&mut self.search_term);
-                if search_edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !self.is_processing {
-                    self.search_and_populate();
-                }
-                if ui.button("Go").clicked() && !self.is_processing {
-                    self.search_and_populate();
-                }
             });
         });
 
@@ -257,7 +217,7 @@ impl eframe::App for MyApp {
                     available_width - button_width,
                     60.0 // or your preferred height
                 ], egui::TextEdit::multiline(&mut self.input));
-                // text_edit.request_focus();
+                text_edit.request_focus();
 
                 if self.is_processing {
                     ui.add(egui::Spinner::new());
@@ -345,27 +305,6 @@ impl eframe::App for MyApp {
                 }
             }
             self.is_processing = false;
-        }
-
-        // Check for search result
-        if let Some(rx) = &self.search_rx {
-            if let Ok(result) = rx.try_recv() {
-                match result {
-                    Ok(search_results) => {
-                        // Replace all messages with search results
-                        self.messages.clear();
-                        self.messages.extend(search_results);
-                    }
-                    Err(error) => {
-                        self.messages.push(ChatMessage {
-                            role: Role::System,
-                            content: format!("Error fetching search results: {}", error),
-                        });
-                    }
-                }
-                self.is_processing = false;
-                self.search_rx = None;
-            }
         }
     }
 
