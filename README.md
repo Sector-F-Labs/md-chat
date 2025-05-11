@@ -2,16 +2,17 @@
 
 A lightweight, fast desktop client for experimenting with OpenAI-compatible APIs. Built with [egui](https://github.com/emilk/egui) for native performance and [CommonMark](https://commonmark.org/) support.
 
-![Screenshot](docs/screenshot.png)
 
 ## Features
 
-- 🚀 Fast native performance with egui
-- 📝 Full Markdown rendering support
-- 🌓 Light/Dark mode toggle
-- 💾 Persistent window position
-- 🔄 Compatible with OpenAI and similar APIs (like [Reservoir](https://github.com/Sector-F-Labs/reservoir))
-- 🎨 Clean, minimal interface
+- Fast native performance with egui
+- Full Markdown rendering support
+- Light/Dark mode toggle
+- Persistent window position
+- Compatible with OpenAI and similar APIs (like [Reservoir](https://github.com/Sector-F-Labs/reservoir))
+- Clean, minimal interface
+
+![Logo](assets/icon.iconset/icon_256x256.png)
 
 ![Screenshot](docs/screenshot.png)
 ## Configuration
