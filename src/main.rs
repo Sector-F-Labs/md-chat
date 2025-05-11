@@ -15,7 +15,7 @@ use whoami;
 const APP_NAME: &str = "MD-Chat";
 
 // Add your preferred models here
-const AVAILABLE_MODELS: &[&str] = &["gpt-4.1", "gpt-4o-mini", "gpt-4o", "gemini-2.0-flash"];
+const AVAILABLE_MODELS: &[&str] = &["gemini-2.0-flash", "gpt-4.1", "gpt-4o-mini", "gpt-4o"];
 
 mod openai;
 use openai::Role;
@@ -79,9 +79,7 @@ struct MyApp {
 }
 
 async fn fetch_history() -> Result<Vec<ChatMessage>, String> {
-    let url = format!(
-        "http://localhost:3017/partition/default/instance/default/command/view/15",
-    );
+    let url = format!("http://localhost:3017/partition/default/instance/default/command/view/15",);
     let client = reqwest::Client::new();
     let response = client.get(url).send().await.map_err(|e| e.to_string())?;
     let text = response.text().await.map_err(|e| e.to_string())?;
