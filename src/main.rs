@@ -30,6 +30,7 @@ struct ChatMessage {
 struct AppConfig {
     openai_api_key: Option<String>,
     api_url: String,
+    models: Option<Vec<String>>,
 }
 
 fn get_config_path() -> Option<PathBuf> {
@@ -44,6 +45,7 @@ fn load_or_create_config() -> AppConfig {
     let default_config = AppConfig {
         openai_api_key: None,
         api_url: "https://api.openai.com".to_string(),
+        models: None,
     };
     if let Some(path) = get_config_path() {
         if !path.exists() {
@@ -64,6 +66,15 @@ fn load_or_create_config() -> AppConfig {
     }
 }
 
+fn default_models() -> Vec<String> {
+    vec![
+        "gemini-2.0-flash".to_string(),
+        "gpt-4.1".to_string(),
+        "gpt-4o-mini".to_string(),
+        "gpt-4o".to_string(),
+    ]
+}
+
 #[allow(dead_code)]
 struct MyApp {
     dark_mode: bool,
@@ -76,6 +87,7 @@ struct MyApp {
     markdown_cache: CommonMarkCache,
     selected_model: String,
     history_rx: Option<Receiver<Result<Vec<ChatMessage>, String>>>,
+    models: Vec<String>,
 }
 
 async fn fetch_history() -> Result<Vec<ChatMessage>, String> {
@@ -133,6 +145,7 @@ impl MyApp {
                 messages.extend(history);
             }
         }
+        let models = config.models.clone().unwrap_or_else(default_models);
         Self {
             dark_mode: true,
             messages,
@@ -142,8 +155,9 @@ impl MyApp {
             request_tx,
             is_processing: false,
             markdown_cache: CommonMarkCache::default(),
-            selected_model: AVAILABLE_MODELS[0].to_string(),
+            selected_model: models.get(0).cloned().unwrap_or_default(),
             history_rx: None,
+            models,
         }
     }
 
@@ -207,11 +221,11 @@ impl eframe::App for MyApp {
                 egui::ComboBox::from_label("Model")
                     .selected_text(&self.selected_model)
                     .show_ui(ui, |ui| {
-                        for model in AVAILABLE_MODELS {
+                        for model in &self.models {
                             ui.selectable_value(
                                 &mut self.selected_model,
-                                model.to_string(),
-                                *model,
+                                model.clone(),
+                                model,
                             );
                         }
                     });
