@@ -79,10 +79,8 @@ struct MyApp {
 }
 
 async fn fetch_history() -> Result<Vec<ChatMessage>, String> {
-    let username = whoami::username();
     let url = format!(
-        "http://localhost:3017/partition/{}/instance/reservoir/command/view/15",
-        username
+        "http://localhost:3017/partition/default/instance/default/command/view/15",
     );
     let client = reqwest::Client::new();
     let response = client.get(url).send().await.map_err(|e| e.to_string())?;
