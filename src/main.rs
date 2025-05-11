@@ -1,7 +1,7 @@
 // main.rs
 use dirs;
 use eframe::egui;
-use eframe::egui::{IconData, ViewportBuilder};
+use eframe::egui::{IconData, ViewportBuilder, FontDefinitions, FontFamily};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use image;
 use serde::{Deserialize, Serialize};
@@ -100,7 +100,7 @@ async fn fetch_history() -> Result<Vec<ChatMessage>, String> {
 
 #[allow(dead_code)]
 impl MyApp {
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // Load or create config
         let config = load_or_create_config();
         // Initialize HTTP client
@@ -146,6 +146,20 @@ impl MyApp {
             }
         }
         let models = config.models.clone().unwrap_or_else(default_models);
+
+        // Set up custom font: Lexend
+        let mut fonts = FontDefinitions::default();
+        // Load the font bytes at compile time
+        let lexend_bytes = include_bytes!("../assets/Lexend-VariableFont_wght.ttf").to_vec();
+        fonts.font_data.insert(
+            "lexend".to_owned(),
+            egui::FontData::from_owned(lexend_bytes).into(),
+        );
+        // Use Lexend for both proportional and monospace
+        fonts.families.get_mut(&FontFamily::Proportional).unwrap().insert(0, "lexend".to_owned());
+        fonts.families.get_mut(&FontFamily::Monospace).unwrap().insert(0, "lexend".to_owned());
+        cc.egui_ctx.set_fonts(fonts);
+
         Self {
             dark_mode: true,
             messages,
