@@ -155,9 +155,17 @@ impl MyApp {
             "lexend".to_owned(),
             egui::FontData::from_owned(lexend_bytes).into(),
         );
-        // Use Lexend for both proportional and monospace
+        // Load the emoji font bytes at compile time (monochrome version)
+        let emoji_bytes = include_bytes!("../assets/NotoEmoji-VariableFont_wght.ttf").to_vec();
+        fonts.font_data.insert(
+            "emoji".to_owned(),
+            egui::FontData::from_owned(emoji_bytes).into(),
+        );
+        // Use Lexend for both proportional and monospace, with emoji as fallback
         fonts.families.get_mut(&FontFamily::Proportional).unwrap().insert(0, "lexend".to_owned());
+        fonts.families.get_mut(&FontFamily::Proportional).unwrap().push("emoji".to_owned());
         fonts.families.get_mut(&FontFamily::Monospace).unwrap().insert(0, "lexend".to_owned());
+        fonts.families.get_mut(&FontFamily::Monospace).unwrap().push("emoji".to_owned());
         cc.egui_ctx.set_fonts(fonts);
 
         Self {
