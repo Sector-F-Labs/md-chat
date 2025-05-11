@@ -1,7 +1,8 @@
 # MD-Chat
 
 A lightweight, fast desktop client for experimenting with OpenAI-compatible APIs. Built with [egui](https://github.com/emilk/egui) for native performance and [CommonMark](https://commonmark.org/) support.
-![Logo](assets/icon.iconset/icon_256x256.png)
+
+![Screenshot](docs/screenshot.png)
 
 ## Features
 
