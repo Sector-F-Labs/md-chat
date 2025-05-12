@@ -99,6 +99,8 @@ struct MyApp {
     pending_scroll: Option<f32>,
     current_scroll_offset: f32,
     message_tops: Vec<f32>,
+    copy_button_tops: Vec<f32>,
+    last_scroll_area_height: f32,
 }
 
 async fn fetch_history() -> Result<Vec<ChatMessage>, String> {
@@ -151,9 +153,11 @@ impl MyApp {
                     .to_string(),
         });
         // Fetch history and append
+        let mut pending_scroll = None;
         if let Ok(rt) = tokio::runtime::Runtime::new() {
             if let Ok(history) = rt.block_on(fetch_history()) {
                 messages.extend(history);
+                pending_scroll = Some(100_000.0);
             }
         }
         let models = config.models.clone().unwrap_or_else(default_models);
@@ -193,9 +197,11 @@ impl MyApp {
             models,
             edit_mode: EditMode::Insert,
             scroll_offset: 0.0,
-            pending_scroll: None,
+            pending_scroll,
             current_scroll_offset: 0.0,
             message_tops: Vec::new(),
+            copy_button_tops: Vec::new(),
+            last_scroll_area_height: 0.0,
         }
     }
 
@@ -320,24 +326,15 @@ impl eframe::App for MyApp {
                     let new_offset = (self.current_scroll_offset - scroll_amount).max(0.0);
                     self.pending_scroll = Some(new_offset);
                 }
-                // Shift+J/K: jump to next/previous message top
-                if !self.message_tops.is_empty() {
-                    if input.key_pressed(egui::Key::J) && input.modifiers.shift {
-                        // Find the first message top below the current offset
-                        if let Some(&next_top) = self.message_tops.iter().find(|&&top| top > self.current_scroll_offset + 1.0) {
-                            self.pending_scroll = Some(next_top);
-                        } else if let Some(&last_top) = self.message_tops.last() {
-                            self.pending_scroll = Some(last_top);
-                        }
-                    }
-                    if input.key_pressed(egui::Key::K) && input.modifiers.shift {
-                        // Find the last message top above the current offset
-                        if let Some(&prev_top) = self.message_tops.iter().rev().find(|&&top| top < self.current_scroll_offset - 1.0) {
-                            self.pending_scroll = Some(prev_top);
-                        } else {
-                            self.pending_scroll = Some(0.0);
-                        }
-                    }
+                // Shift+J/K: scroll by one window height
+                let window_height = self.last_scroll_area_height;
+                if input.key_pressed(egui::Key::J) && input.modifiers.shift {
+                    let new_offset = self.current_scroll_offset + window_height;
+                    self.pending_scroll = Some(new_offset);
+                }
+                if input.key_pressed(egui::Key::K) && input.modifiers.shift {
+                    let new_offset = (self.current_scroll_offset - window_height).max(0.0);
+                    self.pending_scroll = Some(new_offset);
                 }
                 // G (Shift+g) to scroll to bottom, g to scroll to top
                 if input.key_pressed(egui::Key::G) && input.modifiers.shift {
@@ -408,15 +405,19 @@ impl eframe::App for MyApp {
             if let Some(offset) = self.pending_scroll {
                 scroll_area = scroll_area.scroll_offset(egui::Vec2::new(0.0, offset));
             }
-            // Track message top positions
+            // Track Copy button top positions
+            self.copy_button_tops.clear();
             self.message_tops.clear();
             let mut y = 0.0;
             let output = scroll_area.show(ui, |ui| {
+                // Store the visible height of the scroll area for window jumps
+                self.last_scroll_area_height = ui.available_height();
                 for message in &self.messages {
                     let before = ui.cursor().top();
                     ui.group(|ui| {
                         ui.horizontal(|ui| {
-                            // Copy button first, aligned to top right
+                            // Track Copy button position
+                            let copy_button_top = ui.cursor().top();
                             if ui
                                 .button("Copy")
                                 .on_hover_text("Copy entire message markdown")
@@ -424,6 +425,7 @@ impl eframe::App for MyApp {
                             {
                                 ui.output_mut(|o| o.copied_text = message.content.clone());
                             }
+                            self.copy_button_tops.push(copy_button_top);
                             // Add some spacing between the button and the text
                             ui.add_space(4.0);
                             let viewer = CommonMarkViewer::new();
