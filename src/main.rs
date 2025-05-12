@@ -20,6 +20,12 @@ const AVAILABLE_MODELS: &[&str] = &["gemini-2.0-flash", "gpt-4.1", "gpt-4o-mini"
 mod openai;
 use openai::Role;
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum EditMode {
+    Normal,
+    Insert,
+}
+
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 struct ChatMessage {
     role: Role,
@@ -88,6 +94,11 @@ struct MyApp {
     selected_model: String,
     history_rx: Option<Receiver<Result<Vec<ChatMessage>, String>>>,
     models: Vec<String>,
+    edit_mode: EditMode,
+    scroll_offset: f32,
+    pending_scroll: Option<f32>,
+    current_scroll_offset: f32,
+    message_tops: Vec<f32>,
 }
 
 async fn fetch_history() -> Result<Vec<ChatMessage>, String> {
@@ -180,6 +191,11 @@ impl MyApp {
             selected_model: models.get(0).cloned().unwrap_or_default(),
             history_rx: None,
             models,
+            edit_mode: EditMode::Insert,
+            scroll_offset: 0.0,
+            pending_scroll: None,
+            current_scroll_offset: 0.0,
+            message_tops: Vec::new(),
         }
     }
 
@@ -212,6 +228,19 @@ impl MyApp {
             tx.send(result).unwrap();
         });
         self.history_rx = Some(rx);
+    }
+
+    fn handle_insert_mode(&mut self, text_edit: &egui::Response) {
+        text_edit.request_focus();
+    }
+
+    fn handle_normal_mode(&mut self, text_edit: &egui::Response, ctx: &egui::Context) {
+        if text_edit.has_focus() {
+            // Remove focus from the input box
+            ctx.memory_mut(|mem| mem.surrender_focus(text_edit.id));
+            // If the user just clicked, switch to Insert mode
+            self.edit_mode = EditMode::Insert;
+        }
     }
 }
 
@@ -251,8 +280,74 @@ impl eframe::App for MyApp {
                             );
                         }
                     });
+                // Add a spacer to push the mode indicator to the right
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let (mode_text, bg_color, fg_color) = match self.edit_mode {
+                        EditMode::Normal => ("NORMAL", egui::Color32::BLACK, egui::Color32::WHITE),
+                        EditMode::Insert => ("INSERT", egui::Color32::WHITE, egui::Color32::BLACK),
+                    };
+                    ui.label(
+                        egui::RichText::new(mode_text)
+                            .strong()
+                            .background_color(bg_color)
+                            .color(fg_color)
+                            .monospace()
+                            .size(16.0)
+                    );
+                });
             });
         });
+
+        // Handle modal editing key events
+        let input = ctx.input(|i| i.clone());
+        match self.edit_mode {
+            EditMode::Insert => {
+                if input.key_pressed(egui::Key::Escape) {
+                    self.edit_mode = EditMode::Normal;
+                }
+            }
+            EditMode::Normal => {
+                if input.key_pressed(egui::Key::I) && !input.modifiers.shift && !input.modifiers.ctrl && !input.modifiers.alt && !input.modifiers.mac_cmd && !input.modifiers.command {
+                    self.edit_mode = EditMode::Insert;
+                }
+                // j/k scrolling
+                let scroll_amount = 60.0; // One message height
+                if input.key_pressed(egui::Key::J) && !input.modifiers.shift {
+                    let new_offset = self.current_scroll_offset + scroll_amount;
+                    self.pending_scroll = Some(new_offset);
+                }
+                if input.key_pressed(egui::Key::K) && !input.modifiers.shift {
+                    let new_offset = (self.current_scroll_offset - scroll_amount).max(0.0);
+                    self.pending_scroll = Some(new_offset);
+                }
+                // Shift+J/K: jump to next/previous message top
+                if !self.message_tops.is_empty() {
+                    if input.key_pressed(egui::Key::J) && input.modifiers.shift {
+                        // Find the first message top below the current offset
+                        if let Some(&next_top) = self.message_tops.iter().find(|&&top| top > self.current_scroll_offset + 1.0) {
+                            self.pending_scroll = Some(next_top);
+                        } else if let Some(&last_top) = self.message_tops.last() {
+                            self.pending_scroll = Some(last_top);
+                        }
+                    }
+                    if input.key_pressed(egui::Key::K) && input.modifiers.shift {
+                        // Find the last message top above the current offset
+                        if let Some(&prev_top) = self.message_tops.iter().rev().find(|&&top| top < self.current_scroll_offset - 1.0) {
+                            self.pending_scroll = Some(prev_top);
+                        } else {
+                            self.pending_scroll = Some(0.0);
+                        }
+                    }
+                }
+                // G (Shift+g) to scroll to bottom, g to scroll to top
+                if input.key_pressed(egui::Key::G) && input.modifiers.shift {
+                    self.pending_scroll = Some(100_000.0); // Large value to ensure bottom
+                }
+                if input.key_pressed(egui::Key::G) && !input.modifiers.shift {
+                    self.pending_scroll = Some(0.0);
+                }
+            }
+        }
 
         // Bottom panel for input
         egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
@@ -267,18 +362,25 @@ impl eframe::App for MyApp {
                     ],
                     egui::TextEdit::multiline(&mut self.input),
                 );
-                text_edit.request_focus();
+                match self.edit_mode {
+                    EditMode::Insert => {
+                        self.handle_insert_mode(&text_edit);
+                    }
+                    EditMode::Normal => {
+                        self.handle_normal_mode(&text_edit, ctx);
+                    }
+                }
 
                 if self.is_processing {
                     ui.add(egui::Spinner::new());
                 }
 
-                let text_edit_height = text_edit.rect.height();
-                let send_button =
+                let text_edit_height = 60.0;
+                if self.edit_mode == EditMode::Insert && (ui.add(
                     egui::Button::new(if self.is_processing { "..." } else { "Send" })
-                        .min_size(egui::vec2(button_width, text_edit_height));
-                if ui.add(send_button).clicked()
-                    || (ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift))
+                        .min_size(egui::vec2(button_width, text_edit_height))
+                ).clicked()
+                    || (ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift)))
                 {
                     if !self.input.trim().is_empty() && !self.is_processing {
                         let message = std::mem::take(&mut self.input);
@@ -291,35 +393,52 @@ impl eframe::App for MyApp {
                         self.request_tx.send(request).unwrap();
                         self.is_processing = true;
                     }
+                } else {
+                    ui.add_enabled(false,
+                        egui::Button::new(if self.is_processing { "..." } else { "Send" })
+                            .min_size(egui::vec2(button_width, text_edit_height))
+                    );
                 }
             });
         });
 
         // Central panel for messages
         egui::CentralPanel::default().show(ctx, |ui| {
-            egui::ScrollArea::vertical()
-                .stick_to_bottom(true)
-                .show(ui, |ui| {
-                    for message in &self.messages {
-                        ui.group(|ui| {
-                            ui.horizontal(|ui| {
-                                // Copy button first, aligned to top right
-                                if ui
-                                    .button("Copy")
-                                    .on_hover_text("Copy entire message markdown")
-                                    .clicked()
-                                {
-                                    ui.output_mut(|o| o.copied_text = message.content.clone());
-                                }
-                                // Add some spacing between the button and the text
-                                ui.add_space(4.0);
-                                let viewer = CommonMarkViewer::new();
-                                viewer.show(ui, &mut self.markdown_cache, &message.content);
-                            });
+            let mut scroll_area = egui::ScrollArea::vertical();
+            if let Some(offset) = self.pending_scroll {
+                scroll_area = scroll_area.scroll_offset(egui::Vec2::new(0.0, offset));
+            }
+            // Track message top positions
+            self.message_tops.clear();
+            let mut y = 0.0;
+            let output = scroll_area.show(ui, |ui| {
+                for message in &self.messages {
+                    let before = ui.cursor().top();
+                    ui.group(|ui| {
+                        ui.horizontal(|ui| {
+                            // Copy button first, aligned to top right
+                            if ui
+                                .button("Copy")
+                                .on_hover_text("Copy entire message markdown")
+                                .clicked()
+                            {
+                                ui.output_mut(|o| o.copied_text = message.content.clone());
+                            }
+                            // Add some spacing between the button and the text
+                            ui.add_space(4.0);
+                            let viewer = CommonMarkViewer::new();
+                            viewer.show(ui, &mut self.markdown_cache, &message.content);
                         });
-                        ui.add_space(8.0);
-                    }
-                });
+                    });
+                    let after = ui.cursor().top();
+                    self.message_tops.push(before);
+                    y = after;
+                    ui.add_space(8.0);
+                }
+            });
+            // After rendering, update current_scroll_offset and clear pending_scroll
+            self.current_scroll_offset = output.state.offset.y;
+            self.pending_scroll = None;
         });
 
         // Check for history refresh result
