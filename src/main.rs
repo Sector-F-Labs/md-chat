@@ -318,6 +318,9 @@ impl eframe::App for MyApp {
                 }
                 // j/k scrolling
                 let scroll_amount = 60.0; // One message height
+                if input.key_pressed(egui::Key::R) && !input.modifiers.any() {
+                    self.refresh_history();
+                }
                 if input.key_pressed(egui::Key::J) && !input.modifiers.shift {
                     let new_offset = self.current_scroll_offset + scroll_amount;
                     self.pending_scroll = Some(new_offset);
