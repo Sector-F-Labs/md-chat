@@ -205,6 +205,10 @@ impl MyApp {
         }
     }
 
+    fn scroll_to_bottom(&mut self) {
+        self.pending_scroll = Some(100_000.0);
+    }
+
     fn send_message(&mut self) {
         if self.input.trim().is_empty() || self.is_processing {
             return;
@@ -215,6 +219,7 @@ impl MyApp {
             content: self.input.clone(),
         };
         self.messages.push(message);
+        self.scroll_to_bottom();
 
         // Send request
         self.request_tx.send(self.input.clone()).ok();
@@ -341,7 +346,7 @@ impl eframe::App for MyApp {
                 }
                 // G (Shift+g) to scroll to bottom, g to scroll to top
                 if input.key_pressed(egui::Key::G) && input.modifiers.shift {
-                    self.pending_scroll = Some(100_000.0); // Large value to ensure bottom
+                    self.scroll_to_bottom();
                 }
                 if input.key_pressed(egui::Key::G) && !input.modifiers.shift {
                     self.pending_scroll = Some(0.0);
@@ -477,6 +482,7 @@ impl eframe::App for MyApp {
                         role: Role::Assistant,
                         content,
                     });
+                    self.scroll_to_bottom();
                 }
                 Err(error) => {
                     self.messages.push(ChatMessage {
