@@ -8,8 +8,8 @@ eframe = { version = "0.31", features = ["persistence"] }  # GUI framework (incl
 egui_commonmark = { version = "0.20", features = ["better_syntax_highlighting"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-reqwest = { version = "0.12.15", features = ["json"] }  # HTTP client
-tokio = { version = "1.45", features = ["full"] }  # Async runtime
+reqwest = { version = "0.12", features = ["json"] }  # HTTP client
+tokio = { version = "1", features = ["full"] }  # Async runtime
 anyhow = "1.0"  # Error handling
 image = "0.25.6"
 dirs = "6.0.0"

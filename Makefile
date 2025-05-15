@@ -13,10 +13,7 @@ build:
 dev:
 	cargo watch -x run
 
-icon:
-	bash docs/make-icon.sh
-
-bundle: icon build
+bundle: build
 	rm -rf $(APP_BUNDLE)
 	mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	mkdir -p $(APP_BUNDLE)/Contents/Resources
