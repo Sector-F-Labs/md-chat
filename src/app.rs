@@ -5,10 +5,16 @@ use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use crate::openai::Role;
-use crate::{default_models, fetch_history, get_completions_url, load_or_create_config, openai};
+use crate::{fetch_history, openai};
+use crate::config::{self, AppConfig};
+use crate::components::top_panel::TopPanel;
+use crate::components::input_panel::InputPanel;
+use crate::components::message_list_panel::MessageListPanel;
+
+mod components;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum EditMode {
+pub enum EditMode {
     Normal,
     Insert,
 }
@@ -36,8 +42,6 @@ pub struct MyApp {
     pub scroll_offset: f32,
     pub pending_scroll: Option<f32>,
     pub current_scroll_offset: f32,
-    pub message_tops: Vec<f32>,
-    pub copy_button_tops: Vec<f32>,
     pub last_scroll_area_height: f32,
 }
 
@@ -45,7 +49,7 @@ pub struct MyApp {
 impl MyApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // Load or create config
-        let config = load_or_create_config();
+        let app_config = config::load_or_create_config();
         // Initialize HTTP client
         let http_client = reqwest::Client::new();
 
@@ -62,8 +66,8 @@ impl MyApp {
             while let Ok(message) = request_rx.recv() {
                 let tx = response_tx.clone();
                 let (content, model) = message.split_once('\0').unwrap();
-                let api_key = config.openai_api_key.as_deref().unwrap_or("");
-                let api_url = get_completions_url(&config.api_url);
+                let api_key = app_config.openai_api_key.as_deref().unwrap_or("");
+                let api_url = config::get_completions_url(&app_config.api_url);
                 rt.block_on(async {
                     let result =
                         openai::send_openai_request(content, model, api_key, api_url.as_str())
@@ -90,7 +94,7 @@ impl MyApp {
                 pending_scroll = Some(100_000.0);
             }
         }
-        let models = config.models.clone().unwrap_or_else(default_models);
+        let models = app_config.models.clone().unwrap_or_else(config::default_models);
 
         // Set up custom font: Lexend
         let mut fonts = FontDefinitions::default();
@@ -145,8 +149,6 @@ impl MyApp {
             scroll_offset: 0.0,
             pending_scroll,
             current_scroll_offset: 0.0,
-            message_tops: Vec::new(),
-            copy_button_tops: Vec::new(),
             last_scroll_area_height: 0.0,
         }
     }
@@ -186,68 +188,22 @@ impl MyApp {
         });
         self.history_rx = Some(rx);
     }
-
-    fn handle_insert_mode(&mut self, text_edit: &egui::Response) {
-        text_edit.request_focus();
-    }
-
-    fn handle_normal_mode(&mut self, text_edit: &egui::Response, ctx: &egui::Context) {
-        if text_edit.has_focus() {
-            // Remove focus from the input box
-            ctx.memory_mut(|mem| mem.surrender_focus(text_edit.id));
-            // If the user just clicked, switch to Insert mode
-            self.edit_mode = EditMode::Insert;
-        }
-    }
 }
 
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let top_panel_handler = TopPanel;
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button(if self.dark_mode { "🌙" } else { "☀" }).clicked() {
-                    self.dark_mode = !self.dark_mode;
-                    if self.dark_mode {
-                        ctx.set_visuals(egui::Visuals::dark());
-                    } else {
-                        ctx.set_visuals(egui::Visuals::light());
-                    }
-                }
-                ui.separator();
-                if ui
-                    .button("🔄 Refresh")
-                    .on_hover_text("Fetch history")
-                    .clicked()
-                    && !self.is_processing
-                {
-                    self.refresh_history();
-                }
-                if self.is_processing {
-                    ui.add(egui::Spinner::new());
-                }
-                egui::ComboBox::from_label("Model")
-                    .selected_text(&self.selected_model)
-                    .show_ui(ui, |ui| {
-                        for model in &self.models {
-                            ui.selectable_value(&mut self.selected_model, model.clone(), model);
-                        }
-                    });
-                // Add a spacer to push the mode indicator to the right
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (mode_text, bg_color, fg_color) = match self.edit_mode {
-                        EditMode::Normal => ("NORMAL", egui::Color32::BLACK, egui::Color32::WHITE),
-                        EditMode::Insert => ("INSERT", egui::Color32::WHITE, egui::Color32::BLACK),
-                    };
-                    ui.label(
-                        egui::RichText::new(mode_text)
-                            .strong()
-                            .background_color(bg_color)
-                            .color(fg_color)
-                            .monospace()
-                            .size(16.0),
-                    );
-                });
-            });
+            top_panel_handler.show(
+                ctx,
+                ui,
+                &mut self.dark_mode,
+                &self.is_processing,
+                &mut self.selected_model,
+                &self.models,
+                &self.edit_mode,
+                || self.refresh_history(),
+            );
         });
 
         // Handle modal editing key events
@@ -302,104 +258,38 @@ impl eframe::App for MyApp {
         }
 
         // Bottom panel for input
+        let input_panel_handler = InputPanel;
         egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                // Make the text input take up as much width as possible
-                let available_width = ui.available_width();
-                let button_width = 80.0; // Reserve space for the button
-                let text_edit = ui.add_sized(
-                    [
-                        available_width - button_width,
-                        60.0, // or your preferred height
-                    ],
-                    egui::TextEdit::multiline(&mut self.input),
-                );
-                match self.edit_mode {
-                    EditMode::Insert => {
-                        self.handle_insert_mode(&text_edit);
-                    }
-                    EditMode::Normal => {
-                        self.handle_normal_mode(&text_edit, ctx);
-                    }
-                }
-
-                if self.is_processing {
-                    ui.add(egui::Spinner::new());
-                }
-
-                let text_edit_height = 60.0;
-                if self.edit_mode == EditMode::Insert
-                    && (ui
-                        .add(
-                            egui::Button::new(if self.is_processing { "..." } else { "Send" })
-                                .min_size(egui::vec2(button_width, text_edit_height)),
-                        )
-                        .clicked()
-                        || (ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift)))
-                {
-                    if !self.input.trim().is_empty() && !self.is_processing {
-                        let message = std::mem::take(&mut self.input);
-                        self.messages.push(ChatMessage {
-                            role: Role::User,
-                            content: message.clone(),
-                        });
-                        // Combine message and model with a null byte separator
-                        let request = format!("{}\0{}", message, self.selected_model);
-                        self.request_tx.send(request).unwrap();
-                        self.is_processing = true;
-                    }
-                } else {
-                    ui.add_enabled(
-                        false,
-                        egui::Button::new(if self.is_processing { "..." } else { "Send" })
-                            .min_size(egui::vec2(button_width, text_edit_height)),
-                    );
-                }
-            });
+            input_panel_handler.show(
+                ctx,
+                ui,
+                &mut self.input,
+                &self.is_processing,
+                &mut self.edit_mode,
+                |message_to_send: String| {
+                    self.messages.push(ChatMessage {
+                        role: Role::User,
+                        content: message_to_send.clone(),
+                    });
+                    let request_content = format!("{} {}", message_to_send, self.selected_model);
+                    self.request_tx.send(request_content).unwrap();
+                    self.is_processing = true;
+                    self.scroll_to_bottom();
+                },
+            );
         });
 
         // Central panel for messages
         egui::CentralPanel::default().show(ctx, |ui| {
-            let mut scroll_area = egui::ScrollArea::vertical();
-            if let Some(offset) = self.pending_scroll {
-                scroll_area = scroll_area.scroll_offset(egui::Vec2::new(0.0, offset));
-            }
-            // Track Copy button top positions
-            self.copy_button_tops.clear();
-            self.message_tops.clear();
-            let mut y = 0.0;
-            let output = scroll_area.show(ui, |ui| {
-                // Store the visible height of the scroll area for window jumps
-                self.last_scroll_area_height = ui.available_height();
-                for message in &self.messages {
-                    let before = ui.cursor().top();
-                    ui.group(|ui| {
-                        ui.horizontal(|ui| {
-                            // Track Copy button position
-                            let copy_button_top = ui.cursor().top();
-                            if ui
-                                .button("Copy")
-                                .on_hover_text("Copy entire message markdown")
-                                .clicked()
-                            {
-                                ui.output_mut(|o| o.copied_text = message.content.clone());
-                            }
-                            self.copy_button_tops.push(copy_button_top);
-                            // Add some spacing between the button and the text
-                            ui.add_space(4.0);
-                            let viewer = CommonMarkViewer::new();
-                            viewer.show(ui, &mut self.markdown_cache, &message.content);
-                        });
-                    });
-                    let after = ui.cursor().top();
-                    self.message_tops.push(before);
-                    y = after;
-                    ui.add_space(8.0);
-                }
-            });
-            // After rendering, update current_scroll_offset and clear pending_scroll
-            self.current_scroll_offset = output.state.offset.y;
-            self.pending_scroll = None;
+            let message_list_handler = MessageListPanel;
+            message_list_handler.show(
+                ui,
+                &self.messages,
+                &mut self.markdown_cache,
+                &mut self.pending_scroll,
+                &mut self.current_scroll_offset,
+                &mut self.last_scroll_area_height,
+            );
         });
 
         // Check for history refresh result
