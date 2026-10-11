@@ -75,6 +75,7 @@ pub struct App {
 
     edit_mode: EditMode,
     pending_scroll: Option<f32>,
+    scroll_to_end: bool,
     current_scroll_offset: f32,
     last_scroll_area_height: f32,
 }
@@ -82,7 +83,11 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, config: AppConfig) -> Self {
         patina::appearance::watch(&cc.egui_ctx);
-        cc.egui_ctx.set_fonts(fonts());
+        Self::with_context(&cc.egui_ctx, config)
+    }
+
+    fn with_context(egui_ctx: &egui::Context, config: AppConfig) -> Self {
+        egui_ctx.set_fonts(fonts());
         let (skins, skin_errors) = load_skins();
 
         // API requests run on a thread of their own, so the window never waits on the network.
@@ -90,7 +95,7 @@ impl App {
         let (response_tx, response_rx) = channel();
         let api_key = config.openai_api_key.clone().unwrap_or_default();
         let api_url = config.completions_url();
-        let ctx = cc.egui_ctx.clone();
+        let ctx = egui_ctx.clone();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().expect("a tokio runtime");
             while let Ok((content, model)) = request_rx.recv() {
@@ -121,18 +126,19 @@ impl App {
             history_rx: None,
             edit_mode: EditMode::Insert,
             pending_scroll: None,
+            scroll_to_end: false,
             current_scroll_offset: 0.0,
             last_scroll_area_height: 0.0,
             config,
             screenshot,
         };
-        app.refresh_models(&cc.egui_ctx);
+        app.refresh_models(egui_ctx);
         if app.screenshot.is_some() {
             app.messages.extend(sample_conversation());
         } else {
-            app.refresh_history(&cc.egui_ctx, false);
+            app.refresh_history(egui_ctx, false);
         }
-        app.apply_skin(&cc.egui_ctx);
+        app.apply_skin(egui_ctx);
         app
     }
 
@@ -153,7 +159,9 @@ impl App {
     }
 
     fn scroll_to_bottom(&mut self) {
-        self.pending_scroll = Some(f32::MAX);
+        // Done by scrolling to the end of the content once it's laid out: a huge offset
+        // instead pushes the layout to infinity and egui panics on a NaN size.
+        self.scroll_to_end = true;
     }
 
     fn send_message(&mut self) {
@@ -484,6 +492,9 @@ impl App {
                 });
                 ui.add_space(8.0);
             }
+            if std::mem::take(&mut self.scroll_to_end) {
+                ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
+            }
         });
         self.current_scroll_offset = output.state.offset.y;
     }
@@ -514,6 +525,20 @@ impl App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.show(ui);
+    }
+
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        frame::clear_color(visuals, self.custom_frame())
+    }
+
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        frame::release_grab(ctx, raw_input);
+    }
+}
+
+impl App {
+    fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.receive();
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)) {
@@ -577,14 +602,6 @@ impl eframe::App for App {
         }
         self.take_screenshot(&ctx);
     }
-
-    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
-        frame::clear_color(visuals, self.custom_frame())
-    }
-
-    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
-        frame::release_grab(ctx, raw_input);
-    }
 }
 
 /// On the right of the title bar: the model that writes the replies, the
@@ -629,4 +646,51 @@ fn sample_conversation() -> Vec<ChatMessage> {
         ChatMessage { role: Role::User, content: "Show me what markdown you can do.".into() },
         ChatMessage { role: Role::Assistant, content: include_str!("../example.md").into() },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Runs one frame of the app in an 800×600 window.
+    fn frame(ctx: &egui::Context, app: &mut App, events: Vec<egui::Event>) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input, |ui| app.show(ui));
+    }
+
+    #[test]
+    fn sending_with_a_long_conversation_scrolls_to_the_end_without_panicking() {
+        let ctx = egui::Context::default();
+        // Nothing listens on port 9: the model list and the reply fail fast, offline.
+        let config = AppConfig { api_url: "http://127.0.0.1:9".into(), ..Default::default() };
+        let mut app = App::with_context(&ctx, config);
+        app.messages.extend(sample_conversation());
+        app.selected_model = "test-model".into();
+        frame(&ctx, &mut app, vec![]);
+
+        frame(&ctx, &mut app, vec![egui::Event::Text("Hello".into())]);
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&ctx, &mut app, vec![enter]);
+        assert!(matches!(app.messages.last(), Some(ChatMessage { role: Role::User, content }) if content == "Hello"));
+        // The reply (an error here) scrolls to the end again.
+        for _ in 0..500 {
+            frame(&ctx, &mut app, vec![]);
+            if !app.waiting_for_reply {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!app.waiting_for_reply);
+        frame(&ctx, &mut app, vec![]);
+    }
 }
