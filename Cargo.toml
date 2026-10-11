@@ -2,16 +2,19 @@
 name = "md-chat"
 version = "0.1.0"
 edition = "2024"
+description = "A desktop chat client for OpenAI-compatible APIs, with markdown replies. Built on egui and Patina."
+license = "BSD-3-Clause"
+repository = "https://github.com/Sector-F-Labs/md-chat"
 
 [dependencies]
-eframe = { version = "0.31", features = ["persistence"] }  # GUI framework (includes egui)  
-egui_commonmark = { version = "0.20", features = ["better_syntax_highlighting"] }
+eframe = { version = "0.35", features = ["persistence"] }
+egui = "0.35"
+patina-ui = "0.1.2"
+egui_commonmark = { version = "0.24", features = ["better_syntax_highlighting"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 reqwest = { version = "0.12", features = ["json"] }  # HTTP client
 tokio = { version = "1", features = ["full"] }  # Async runtime
-anyhow = "1.0"  # Error handling
-image = "0.25.6"
+image = { version = "0.25.6", default-features = false, features = ["png"] }
 dirs = "6.0.0"
 toml = "0.8.22"
-whoami = "1.6.0"

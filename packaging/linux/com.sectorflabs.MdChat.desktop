@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=MD-Chat
+GenericName=AI Chat
+Comment=Chat with OpenAI-compatible models, with markdown replies
+Exec=md-chat
+Icon=com.sectorflabs.MdChat
+Terminal=false
+Categories=Utility;Network;
+Keywords=chat;ai;llm;openai;markdown;reservoir;
+StartupNotify=true
+StartupWMClass=com.sectorflabs.MdChat

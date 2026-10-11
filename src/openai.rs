@@ -1,17 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     System,
+    #[default]
     User,
     Assistant,
-}
-
-impl Default for Role {
-    fn default() -> Self {
-        Role::User
-    }
 }
 
 #[derive(Debug, Serialize)]
@@ -83,3 +78,43 @@ pub async fn send_openai_request(
         .map(|choice| choice.message.content.clone())
         .ok_or_else(|| "No response from OpenAI".to_string())
 } 
+#[derive(Debug, Deserialize)]
+struct ModelList {
+    data: Vec<ModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelEntry {
+    id: String,
+}
+
+/// The models the API has (`GET /v1/models`), leaving out embedding models,
+/// which can't chat.
+pub async fn list_models(models_url: &str, api_key: &str) -> Result<Vec<String>, String> {
+    let mut request = reqwest::Client::new().get(models_url);
+    if !api_key.is_empty() {
+        request = request.header("Authorization", format!("Bearer {}", api_key));
+    }
+    let response = request.send().await.map_err(|e| e.to_string())?;
+    let response = response.error_for_status().map_err(|e| e.to_string())?;
+    let list: ModelList = response.json().await.map_err(|e| e.to_string())?;
+    Ok(chat_models(list))
+}
+
+fn chat_models(list: ModelList) -> Vec<String> {
+    list.data.into_iter().map(|m| m.id).filter(|id| !id.to_lowercase().contains("embed")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedding_models_are_left_out() {
+        let list: ModelList = serde_json::from_str(
+            r#"{"object":"list","data":[{"id":"qwen3.5:latest"},{"id":"nomic-embed-text:latest"},{"id":"embeddinggemma:latest"},{"id":"gemma4:12b"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(chat_models(list), ["qwen3.5:latest", "gemma4:12b"]);
+    }
+}

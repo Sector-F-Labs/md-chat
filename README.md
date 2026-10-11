@@ -1,90 +1,72 @@
 # MD-Chat
 
-A lightweight, fast desktop client for experimenting with OpenAI-compatible APIs. Built with [egui](https://github.com/emilk/egui) for native performance and [CommonMark](https://commonmark.org/) support.
+A lightweight, fast desktop client for chatting with OpenAI-compatible APIs, with replies rendered
+as markdown. Built with [egui](https://github.com/emilk/egui) on
+[Patina](https://github.com/Sector-F-Labs/patina), so it shares its window frame and skins with
+the other Sector F apps.
 
+![Screenshot](docs/screenshot.png)
 
 ## Features
 
-- Fast native performance with egui
-- Full Markdown rendering support
-- Light/Dark mode toggle
-- Persistent window position
-- Compatible with OpenAI and similar APIs (like [Reservoir](https://github.com/Sector-F-Labs/reservoir))
-- Clean, minimal interface
+- Talks to a local [Ollama](https://ollama.com) out of the box, or any OpenAI-compatible API
+  (OpenAI, [Reservoir](https://github.com/Sector-F-Labs/reservoir), …)
+- The model picker lists only the models the API actually has
+- Full markdown rendering, with syntax-highlighted code blocks
+- Patina skins (Default follows the desktop's light/dark setting; Dark Orange, Steam Classic and
+  more built in, or your own in `~/.config/patina/skins/`)
+- Vim-style modal keys for reading long conversations
+- History from a local Reservoir
 
-![Logo](assets/icon.iconset/icon_256x256.png)
-
-![Screenshot](docs/screenshot.png)
 ## Configuration
 
-MD-Chat uses a TOML config file for settings such as your OpenAI API key and API URL. **Environment variables are no longer required.**
+Settings live in a TOML file, created on first run:
 
-### Config File Location
-- **macOS:** `~/Library/Application Support/MD-Chat/config.toml`
 - **Linux:** `~/.config/MD-Chat/config.toml`
+- **macOS:** `~/Library/Application Support/MD-Chat/config.toml`
 
-The config file is created automatically on first run if it does not exist.
-
-### Example `config.toml`
 ```toml
-openai_api_key = "sk-...yourkey..."
-api_url = "https://api.openai.com/v1/chat/completions"
+api_url = "http://localhost:11434"   # requests go to <api_url>/v1/chat/completions
+# openai_api_key = "sk-..."          # for APIs that need one
 ```
-- If `openai_api_key` is missing or empty, requests will fail unless the API does not require a key.
-- You can edit this file to change your API key or use a different API URL.
 
-## Building and Running
-
-```bash
-# Build the application
-cargo build --release
-
-# Run the application
-cargo run --release
-```
+- The default `api_url` is a local Ollama. For OpenAI, set `api_url = "https://api.openai.com"`
+  and your `openai_api_key`.
+- Models come from the API's `/v1/models` list, leaving out embedding models. File → Refresh
+  Models fetches it again, for example after `ollama pull`.
+- The app also saves the last model, the skin and the title bar setting here.
 
 ## Usage
 
-1. Launch the application
-2. Type your message in the input box
-3. Press Enter or click Send to submit
-4. View the markdown-formatted response
+Type a message and press **Enter** to send it; **Shift+Enter** starts a new line. Each message has
+a **Copy** button that copies its markdown.
 
-## Modal Editing & Vim-like Navigation
+### Modal keys
 
-MD-Chat supports modal editing inspired by vim, making keyboard navigation fast and efficient:
+- **INSERT** mode: type as usual. **Esc** switches to NORMAL mode.
+- **NORMAL** mode: **i**, or a click in the input box, goes back to INSERT mode.
 
-- **Modes:**
-  - **INSERT**: Type and edit your message as usual. Press `Esc` to enter NORMAL mode.
-  - **NORMAL**: Keyboard navigation and commands. Press `i` or click the input box to return to INSERT mode.
+The current mode is shown in the status bar.
 
-- **Navigation in NORMAL mode:**
-  - `j` / `k`: Scroll down/up by a small amount
-  - `Shift+j` / `Shift+k`: Scroll down/up by one window height
-  - `g`: Jump to the top
-  - `G`: Jump to the bottom
-  - `r`: Refresh chat history
+| Key (NORMAL) | Action |
+|--------------|--------|
+| `j` / `k` | Scroll down / up a little |
+| `Shift+J` / `Shift+K` | Scroll down / up one window height |
+| `g` / `G` | Jump to the top / bottom |
+| `r` | Refresh history from Reservoir |
+| `Ctrl+Q` | Quit (any mode) |
 
-- **Other:**
-  - The current mode is shown in the top right, styled like vim.
-  - The input box is always interactive; clicking it in NORMAL mode returns you to INSERT mode.
+## Build
 
-This makes MD-Chat a joy to use for keyboard-centric users and fans of modal editing!
+```bash
+make            # list the targets
+make run        # run it
+make check      # tests and clippy
+make install    # per-user install with a launcher (Linux, PREFIX=~/.local)
+make bundle     # target/MD-Chat.app (macOS)
+```
 
-## Development
-
-The codebase is organized into two main components:
-
-- `src/main.rs`: UI and application logic
-- `src/openai.rs`: API client implementation
-
-## Dependencies
-
-- eframe: Egui framework for native applications
-- egui_commonmark: Markdown rendering support
-- reqwest: HTTP client
-- tokio: Async runtime
-- serde: Serialization/deserialization
+Decisions are recorded as ADRs in [docs/adr](docs/adr/README.md).
 
 ## License
 

@@ -1,11 +1,23 @@
-use eframe::egui;
-use eframe::egui::{FontDefinitions, FontFamily};
-use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
-use serde::{Deserialize, Serialize};
+//! The window: Patina's frame and header bar, the conversation, the input
+//! box and a status bar with the vim-style mode.
+
+use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use crate::openai::Role;
-use crate::{default_models, fetch_history, get_completions_url, load_or_create_config, openai};
+use egui::{FontData, FontDefinitions, FontFamily};
+use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
+use patina::frame::{self, TitleBar};
+use patina::skin::{self, Skin};
+use serde::{Deserialize, Serialize};
+
+use crate::config::AppConfig;
+use crate::openai::{self, Role};
+
+/// The skin used until the user picks one: stock egui, following the
+/// desktop's light or dark setting.
+const HOME_SKIN: &str = skin::DEFAULT_SKIN;
+
+const SYSTEM_PROMPT: &str = "You are a helpful assistant. You can use markdown formatting in your responses.";
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum EditMode {
@@ -19,439 +31,554 @@ pub struct ChatMessage {
     pub content: String,
 }
 
-#[allow(dead_code)]
-pub struct MyApp {
-    pub dark_mode: bool,
-    pub messages: Vec<ChatMessage>,
-    pub input: String,
-    pub http_client: reqwest::Client,
-    pub response_rx: Receiver<Result<String, String>>,
-    pub request_tx: Sender<String>,
-    pub is_processing: bool,
-    pub markdown_cache: CommonMarkCache,
-    pub selected_model: String,
-    pub history_rx: Option<Receiver<Result<Vec<ChatMessage>, String>>>,
-    pub models: Vec<String>,
-    edit_mode: EditMode,
-    pub scroll_offset: f32,
-    pub pending_scroll: Option<f32>,
-    pub current_scroll_offset: f32,
-    pub message_tops: Vec<f32>,
-    pub copy_button_tops: Vec<f32>,
-    pub last_scroll_area_height: f32,
+type HistoryResult = Result<Vec<ChatMessage>, String>;
+
+/// What the header asks for, handled after it's drawn.
+enum Action {
+    Quit,
+    RefreshHistory,
+    RefreshModels,
+    SetSkin(String),
+    ReloadSkins,
+    OpenSkinsFolder,
+    SystemTitleBar(bool),
 }
 
-#[allow(dead_code)]
-impl MyApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Load or create config
-        let config = load_or_create_config();
-        // Initialize HTTP client
-        let http_client = reqwest::Client::new();
+pub struct App {
+    config: AppConfig,
+    skins: Vec<Skin>,
+    skin_errors: Vec<String>,
+    /// A skin for this run only, not saved (`MDCHAT_SKIN`, for screenshots).
+    skin_override: Option<String>,
+    /// `MDCHAT_SCREENSHOT`: where to save a screenshot, and whether it has
+    /// been asked for.
+    screenshot: Option<(PathBuf, bool)>,
 
-        // Set up channels for async communication
-        let (request_tx, request_rx): (Sender<String>, Receiver<String>) = channel();
-        let (response_tx, response_rx): (
-            Sender<Result<String, String>>,
-            Receiver<Result<String, String>>,
-        ) = channel();
+    messages: Vec<ChatMessage>,
+    input: String,
+    /// The chat models the API has, fetched at start and from File → Refresh Models.
+    models: Vec<String>,
+    /// Empty until the list arrives.
+    selected_model: String,
+    models_rx: Option<Receiver<Result<Vec<String>, String>>>,
+    models_error: Option<String>,
+    markdown_cache: CommonMarkCache,
+    request_tx: Sender<(String, String)>,
+    response_rx: Receiver<Result<String, String>>,
+    waiting_for_reply: bool,
+    /// A history fetch in flight, and whether a failure should be shown
+    /// (not at start-up, when Reservoir may simply not be running).
+    history_rx: Option<(Receiver<HistoryResult>, bool)>,
 
-        // Spawn background thread for handling API requests
+    edit_mode: EditMode,
+    pending_scroll: Option<f32>,
+    current_scroll_offset: f32,
+    last_scroll_area_height: f32,
+}
+
+impl App {
+    pub fn new(cc: &eframe::CreationContext<'_>, config: AppConfig) -> Self {
+        patina::appearance::watch(&cc.egui_ctx);
+        cc.egui_ctx.set_fonts(fonts());
+        let (skins, skin_errors) = load_skins();
+
+        // API requests run on a thread of their own, so the window never waits on the network.
+        let (request_tx, request_rx) = channel::<(String, String)>();
+        let (response_tx, response_rx) = channel();
+        let api_key = config.openai_api_key.clone().unwrap_or_default();
+        let api_url = config.completions_url();
+        let ctx = cc.egui_ctx.clone();
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            while let Ok(message) = request_rx.recv() {
-                let tx = response_tx.clone();
-                let (content, model) = message.split_once('\0').unwrap();
-                let api_key = config.openai_api_key.as_deref().unwrap_or("");
-                let api_url = get_completions_url(&config.api_url);
-                rt.block_on(async {
-                    let result =
-                        openai::send_openai_request(content, model, api_key, api_url.as_str())
-                            .await;
-                    tx.send(result).unwrap();
-                });
+            let rt = tokio::runtime::Runtime::new().expect("a tokio runtime");
+            while let Ok((content, model)) = request_rx.recv() {
+                let result = rt.block_on(openai::send_openai_request(&content, &model, &api_key, &api_url));
+                if response_tx.send(result).is_err() {
+                    break;
+                }
+                ctx.request_repaint();
             }
         });
 
-        // Fetch history synchronously
-        let mut messages = Vec::new();
-        // Add initial system message
-        messages.push(ChatMessage {
-            role: Role::System,
-            content:
-                "You are a helpful assistant. You can use markdown formatting in your responses."
-                    .to_string(),
-        });
-        // Fetch history and append
-        let mut pending_scroll = None;
-        if let Ok(rt) = tokio::runtime::Runtime::new() {
-            if let Ok(history) = rt.block_on(fetch_history()) {
-                messages.extend(history);
-                pending_scroll = Some(100_000.0);
-            }
-        }
-        let models = config.models.clone().unwrap_or_else(default_models);
-
-        // Set up custom font: Lexend
-        let mut fonts = FontDefinitions::default();
-        // Load the font bytes at compile time
-        let lexend_bytes = include_bytes!("../assets/Lexend-VariableFont_wght.ttf").to_vec();
-        fonts.font_data.insert(
-            "lexend".to_owned(),
-            egui::FontData::from_owned(lexend_bytes).into(),
-        );
-        // Load the emoji font bytes at compile time (monochrome version)
-        let emoji_bytes = include_bytes!("../assets/NotoEmoji-VariableFont_wght.ttf").to_vec();
-        fonts.font_data.insert(
-            "emoji".to_owned(),
-            egui::FontData::from_owned(emoji_bytes).into(),
-        );
-        // Use Lexend for both proportional and monospace, with emoji as fallback
-        fonts
-            .families
-            .get_mut(&FontFamily::Proportional)
-            .unwrap()
-            .insert(0, "lexend".to_owned());
-        fonts
-            .families
-            .get_mut(&FontFamily::Proportional)
-            .unwrap()
-            .push("emoji".to_owned());
-        fonts
-            .families
-            .get_mut(&FontFamily::Monospace)
-            .unwrap()
-            .insert(0, "lexend".to_owned());
-        fonts
-            .families
-            .get_mut(&FontFamily::Monospace)
-            .unwrap()
-            .push("emoji".to_owned());
-        cc.egui_ctx.set_fonts(fonts);
-
-        Self {
-            dark_mode: true,
-            messages,
+        let screenshot = std::env::var_os("MDCHAT_SCREENSHOT").map(|p| (PathBuf::from(p), false));
+        let mut app = Self {
+            skins,
+            skin_errors,
+            skin_override: std::env::var("MDCHAT_SKIN").ok(),
+            messages: vec![ChatMessage { role: Role::System, content: SYSTEM_PROMPT.into() }],
             input: String::new(),
-            http_client,
-            response_rx,
-            request_tx,
-            is_processing: false,
+            models: Vec::new(),
+            selected_model: String::new(),
+            models_rx: None,
+            models_error: None,
             markdown_cache: CommonMarkCache::default(),
-            selected_model: models.get(0).cloned().unwrap_or_default(),
+            request_tx,
+            response_rx,
+            waiting_for_reply: false,
             history_rx: None,
-            models,
             edit_mode: EditMode::Insert,
-            scroll_offset: 0.0,
-            pending_scroll,
+            pending_scroll: None,
             current_scroll_offset: 0.0,
-            message_tops: Vec::new(),
-            copy_button_tops: Vec::new(),
             last_scroll_area_height: 0.0,
+            config,
+            screenshot,
+        };
+        app.refresh_models(&cc.egui_ctx);
+        if app.screenshot.is_some() {
+            app.messages.extend(sample_conversation());
+        } else {
+            app.refresh_history(&cc.egui_ctx, false);
         }
+        app.apply_skin(&cc.egui_ctx);
+        app
+    }
+
+    fn custom_frame(&self) -> bool {
+        !self.config.system_title_bar
+    }
+
+    /// The chosen skin, falling back to `HOME_SKIN` (a saved name may no
+    /// longer exist), then Default.
+    fn skin(&self) -> &Skin {
+        let find = |name: &str| self.skins.iter().find(|s| s.name.eq_ignore_ascii_case(name));
+        let chosen = self.skin_override.as_deref().or(self.config.skin.as_deref()).unwrap_or(HOME_SKIN);
+        find(chosen).or_else(|| find(HOME_SKIN)).unwrap_or(&self.skins[0])
+    }
+
+    fn apply_skin(&self, ctx: &egui::Context) {
+        self.skin().apply(ctx);
     }
 
     fn scroll_to_bottom(&mut self) {
-        self.pending_scroll = Some(100_000.0);
+        self.pending_scroll = Some(f32::MAX);
     }
 
     fn send_message(&mut self) {
-        if self.input.trim().is_empty() || self.is_processing {
+        let text = self.input.trim().to_string();
+        if text.is_empty() || self.waiting_for_reply || self.selected_model.is_empty() {
             return;
         }
-
-        let message = ChatMessage {
-            role: Role::User,
-            content: self.input.clone(),
-        };
-        self.messages.push(message);
-        self.scroll_to_bottom();
-
-        // Send request
-        self.request_tx.send(self.input.clone()).ok();
         self.input.clear();
-        self.is_processing = true;
+        self.messages.push(ChatMessage { role: Role::User, content: text.clone() });
+        self.request_tx.send((text, self.selected_model.clone())).ok();
+        self.waiting_for_reply = true;
+        self.scroll_to_bottom();
     }
 
-    fn refresh_history(&mut self) {
-        if self.is_processing {
+    fn refresh_models(&mut self, ctx: &egui::Context) {
+        if self.models_rx.is_some() {
             return;
         }
-        self.is_processing = true;
         let (tx, rx) = channel();
+        let ctx = ctx.clone();
+        let url = self.config.models_url();
+        let key = self.config.openai_api_key.clone().unwrap_or_default();
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            let result = rt.block_on(fetch_history());
-            tx.send(result).unwrap();
+            let result = tokio::runtime::Runtime::new()
+                .map_err(|e| e.to_string())
+                .and_then(|rt| rt.block_on(openai::list_models(&url, &key)));
+            let _ = tx.send(result);
+            ctx.request_repaint();
         });
-        self.history_rx = Some(rx);
+        self.models_rx = Some(rx);
     }
 
-    fn handle_insert_mode(&mut self, text_edit: &egui::Response) {
-        text_edit.request_focus();
+    fn refresh_history(&mut self, ctx: &egui::Context, report_errors: bool) {
+        if self.history_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = channel();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let result = tokio::runtime::Runtime::new()
+                .map_err(|e| e.to_string())
+                .and_then(|rt| rt.block_on(crate::history::fetch()));
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+        self.history_rx = Some((rx, report_errors));
     }
 
-    fn handle_normal_mode(&mut self, text_edit: &egui::Response, ctx: &egui::Context) {
-        if text_edit.has_focus() {
-            // Remove focus from the input box
-            ctx.memory_mut(|mem| mem.surrender_focus(text_edit.id));
-            // If the user just clicked, switch to Insert mode
-            self.edit_mode = EditMode::Insert;
+    /// Replies, history and the model list that have arrived since the last frame.
+    fn receive(&mut self) {
+        if let Some(rx) = &self.models_rx
+            && let Ok(result) = rx.try_recv()
+        {
+            match result {
+                Ok(models) => {
+                    // The last model picked if it's still there, else the API's first.
+                    let keep = [Some(&self.selected_model), self.config.model.as_ref()]
+                        .into_iter()
+                        .flatten()
+                        .find(|m| models.contains(m))
+                        .cloned();
+                    self.selected_model = keep.or_else(|| models.first().cloned()).unwrap_or_default();
+                    self.models_error = None;
+                    self.models = models;
+                }
+                Err(error) => self.models_error = Some(format!("Can't list models at {}: {error}", self.config.api_url)),
+            }
+            self.models_rx = None;
+        }
+        if let Some((rx, report_errors)) = &self.history_rx
+            && let Ok(result) = rx.try_recv()
+        {
+            match result {
+                Ok(history) => {
+                    // Keep the system message, replace the rest.
+                    self.messages.truncate(1);
+                    self.messages.extend(history);
+                    self.scroll_to_bottom();
+                }
+                Err(error) if *report_errors => self
+                    .messages
+                    .push(ChatMessage { role: Role::System, content: format!("Error fetching history: {error}") }),
+                Err(_) => {}
+            }
+            self.history_rx = None;
+        }
+        if let Ok(response) = self.response_rx.try_recv() {
+            let message = match response {
+                Ok(content) => ChatMessage { role: Role::Assistant, content },
+                Err(error) => ChatMessage { role: Role::System, content: format!("Error: {error}") },
+            };
+            self.messages.push(message);
+            self.waiting_for_reply = false;
+            self.scroll_to_bottom();
         }
     }
-}
 
-impl eframe::App for MyApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button(if self.dark_mode { "🌙" } else { "☀" }).clicked() {
-                    self.dark_mode = !self.dark_mode;
-                    if self.dark_mode {
-                        ctx.set_visuals(egui::Visuals::dark());
-                    } else {
-                        ctx.set_visuals(egui::Visuals::light());
-                    }
-                }
-                ui.separator();
-                if ui
-                    .button("🔄 Refresh")
-                    .on_hover_text("Fetch history")
-                    .clicked()
-                    && !self.is_processing
-                {
-                    self.refresh_history();
-                }
-                if self.is_processing {
-                    ui.add(egui::Spinner::new());
-                }
-                egui::ComboBox::from_label("Model")
-                    .selected_text(&self.selected_model)
-                    .show_ui(ui, |ui| {
-                        for model in &self.models {
-                            ui.selectable_value(&mut self.selected_model, model.clone(), model);
-                        }
-                    });
-                // Add a spacer to push the mode indicator to the right
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (mode_text, bg_color, fg_color) = match self.edit_mode {
-                        EditMode::Normal => ("NORMAL", egui::Color32::BLACK, egui::Color32::WHITE),
-                        EditMode::Insert => ("INSERT", egui::Color32::WHITE, egui::Color32::BLACK),
-                    };
-                    ui.label(
-                        egui::RichText::new(mode_text)
-                            .strong()
-                            .background_color(bg_color)
-                            .color(fg_color)
-                            .monospace()
-                            .size(16.0),
-                    );
-                });
-            });
-        });
-
-        // Handle modal editing key events
-        let input = ctx.input(|i| i.clone());
+    /// NORMAL mode's vim-like keys, and Esc into it.
+    fn handle_keys(&mut self, ctx: &egui::Context) {
         match self.edit_mode {
             EditMode::Insert => {
-                if input.key_pressed(egui::Key::Escape) {
+                if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                     self.edit_mode = EditMode::Normal;
                 }
             }
             EditMode::Normal => {
-                if input.key_pressed(egui::Key::I)
-                    && !input.modifiers.shift
-                    && !input.modifiers.ctrl
-                    && !input.modifiers.alt
-                    && !input.modifiers.mac_cmd
-                    && !input.modifiers.command
-                {
+                let (plain, shift) = ctx.input(|i| {
+                    let pressed = |mods: egui::Modifiers| {
+                        move |key| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && *modifiers == mods))
+                    };
+                    let plain = pressed(egui::Modifiers::NONE);
+                    let shift = pressed(egui::Modifiers::SHIFT);
+                    (
+                        [egui::Key::I, egui::Key::R, egui::Key::J, egui::Key::K, egui::Key::G].map(plain),
+                        [egui::Key::J, egui::Key::K, egui::Key::G].map(shift),
+                    )
+                });
+                let [i, r, j, k, g] = plain;
+                let [big_j, big_k, big_g] = shift;
+                let line = 60.0;
+                let page = self.last_scroll_area_height;
+                let offset = self.current_scroll_offset;
+                if i {
                     self.edit_mode = EditMode::Insert;
                 }
-                // j/k scrolling
-                let scroll_amount = 60.0; // One message height
-                if input.key_pressed(egui::Key::R) && !input.modifiers.any() {
-                    self.refresh_history();
+                if r {
+                    self.refresh_history(ctx, true);
                 }
-                if input.key_pressed(egui::Key::J) && !input.modifiers.shift {
-                    let new_offset = self.current_scroll_offset + scroll_amount;
-                    self.pending_scroll = Some(new_offset);
+                if j {
+                    self.pending_scroll = Some(offset + line);
                 }
-                if input.key_pressed(egui::Key::K) && !input.modifiers.shift {
-                    let new_offset = (self.current_scroll_offset - scroll_amount).max(0.0);
-                    self.pending_scroll = Some(new_offset);
+                if k {
+                    self.pending_scroll = Some((offset - line).max(0.0));
                 }
-                // Shift+J/K: scroll by one window height
-                let window_height = self.last_scroll_area_height;
-                if input.key_pressed(egui::Key::J) && input.modifiers.shift {
-                    let new_offset = self.current_scroll_offset + window_height;
-                    self.pending_scroll = Some(new_offset);
+                if big_j {
+                    self.pending_scroll = Some(offset + page);
                 }
-                if input.key_pressed(egui::Key::K) && input.modifiers.shift {
-                    let new_offset = (self.current_scroll_offset - window_height).max(0.0);
-                    self.pending_scroll = Some(new_offset);
+                if big_k {
+                    self.pending_scroll = Some((offset - page).max(0.0));
                 }
-                // G (Shift+g) to scroll to bottom, g to scroll to top
-                if input.key_pressed(egui::Key::G) && input.modifiers.shift {
-                    self.scroll_to_bottom();
-                }
-                if input.key_pressed(egui::Key::G) && !input.modifiers.shift {
+                if g {
                     self.pending_scroll = Some(0.0);
                 }
-            }
-        }
-
-        // Bottom panel for input
-        egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                // Make the text input take up as much width as possible
-                let available_width = ui.available_width();
-                let button_width = 80.0; // Reserve space for the button
-                let text_edit = ui.add_sized(
-                    [
-                        available_width - button_width,
-                        60.0, // or your preferred height
-                    ],
-                    egui::TextEdit::multiline(&mut self.input),
-                );
-                match self.edit_mode {
-                    EditMode::Insert => {
-                        self.handle_insert_mode(&text_edit);
-                    }
-                    EditMode::Normal => {
-                        self.handle_normal_mode(&text_edit, ctx);
-                    }
-                }
-
-                if self.is_processing {
-                    ui.add(egui::Spinner::new());
-                }
-
-                let text_edit_height = 60.0;
-                if self.edit_mode == EditMode::Insert
-                    && (ui
-                        .add(
-                            egui::Button::new(if self.is_processing { "..." } else { "Send" })
-                                .min_size(egui::vec2(button_width, text_edit_height)),
-                        )
-                        .clicked()
-                        || (ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift)))
-                {
-                    if !self.input.trim().is_empty() && !self.is_processing {
-                        let message = std::mem::take(&mut self.input);
-                        self.messages.push(ChatMessage {
-                            role: Role::User,
-                            content: message.clone(),
-                        });
-                        // Combine message and model with a null byte separator
-                        let request = format!("{}\0{}", message, self.selected_model);
-                        self.request_tx.send(request).unwrap();
-                        self.is_processing = true;
-                    }
-                } else {
-                    ui.add_enabled(
-                        false,
-                        egui::Button::new(if self.is_processing { "..." } else { "Send" })
-                            .min_size(egui::vec2(button_width, text_edit_height)),
-                    );
-                }
-            });
-        });
-
-        // Central panel for messages
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let mut scroll_area = egui::ScrollArea::vertical();
-            if let Some(offset) = self.pending_scroll {
-                scroll_area = scroll_area.scroll_offset(egui::Vec2::new(0.0, offset));
-            }
-            // Track Copy button top positions
-            self.copy_button_tops.clear();
-            self.message_tops.clear();
-            let mut y = 0.0;
-            let output = scroll_area.show(ui, |ui| {
-                // Store the visible height of the scroll area for window jumps
-                self.last_scroll_area_height = ui.available_height();
-                for message in &self.messages {
-                    let before = ui.cursor().top();
-                    ui.group(|ui| {
-                        ui.horizontal(|ui| {
-                            // Track Copy button position
-                            let copy_button_top = ui.cursor().top();
-                            if ui
-                                .button("Copy")
-                                .on_hover_text("Copy entire message markdown")
-                                .clicked()
-                            {
-                                ui.output_mut(|o| o.copied_text = message.content.clone());
-                            }
-                            self.copy_button_tops.push(copy_button_top);
-                            // Add some spacing between the button and the text
-                            ui.add_space(4.0);
-                            let viewer = CommonMarkViewer::new();
-                            viewer.show(ui, &mut self.markdown_cache, &message.content);
-                        });
-                    });
-                    let after = ui.cursor().top();
-                    self.message_tops.push(before);
-                    y = after;
-                    ui.add_space(8.0);
-                }
-            });
-            // After rendering, update current_scroll_offset and clear pending_scroll
-            self.current_scroll_offset = output.state.offset.y;
-            self.pending_scroll = None;
-        });
-
-        // Check for history refresh result
-        if let Some(rx) = &self.history_rx {
-            if let Ok(result) = rx.try_recv() {
-                match result {
-                    Ok(history) => {
-                        // Keep the system message, replace the rest
-                        if !self.messages.is_empty() {
-                            self.messages.truncate(1);
-                        }
-                        self.messages.extend(history);
-                    }
-                    Err(error) => {
-                        self.messages.push(ChatMessage {
-                            role: Role::System,
-                            content: format!("Error fetching history: {}", error),
-                        });
-                    }
-                }
-                self.is_processing = false;
-                self.history_rx = None;
-            }
-        }
-
-        // Check for responses
-        if let Ok(response) = self.response_rx.try_recv() {
-            match response {
-                Ok(content) => {
-                    self.messages.push(ChatMessage {
-                        role: Role::Assistant,
-                        content,
-                    });
+                if big_g {
                     self.scroll_to_bottom();
                 }
-                Err(error) => {
-                    self.messages.push(ChatMessage {
-                        role: Role::System,
-                        content: format!("Error: {}", error),
-                    });
-                }
             }
-            self.is_processing = false;
         }
     }
 
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        // Save theme preference
-        storage.set_string("dark_mode", self.dark_mode.to_string());
+    /// Left side of the title bar: word menus (Patina's ADR-0006).
+    fn menus(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        ui.menu_button("File", |ui| {
+            if ui.add(egui::Button::new("Refresh History").shortcut_text("R")).clicked() {
+                actions.push(Action::RefreshHistory);
+                ui.close();
+            }
+            if ui.button("Refresh Models").clicked() {
+                actions.push(Action::RefreshModels);
+                ui.close();
+            }
+            ui.separator();
+            if ui.add(egui::Button::new("Quit").shortcut_text("Ctrl+Q")).clicked() {
+                actions.push(Action::Quit);
+                ui.close();
+            }
+        });
+        ui.menu_button("View", |ui| {
+            let mut system = self.config.system_title_bar;
+            if ui.checkbox(&mut system, "System Title Bar").changed() {
+                actions.push(Action::SystemTitleBar(system));
+            }
+        });
+        ui.menu_button("Skins", |ui| {
+            let current = self.skin().name.clone();
+            for skin in &self.skins {
+                if ui.radio(skin.name == current, &skin.name).clicked() {
+                    actions.push(Action::SetSkin(skin.name.clone()));
+                }
+            }
+            ui.separator();
+            if ui.button("Reload skins").clicked() {
+                actions.push(Action::ReloadSkins);
+            }
+            if ui.button("Open skins folder").clicked() {
+                actions.push(Action::OpenSkinsFolder);
+                ui.close();
+            }
+            for error in &self.skin_errors {
+                ui.colored_label(ui.visuals().error_fg_color, error);
+            }
+        });
     }
 
-    fn persist_egui_memory(&self) -> bool {
-        true
+    fn handle(&mut self, ctx: &egui::Context, action: Action) {
+        match action {
+            Action::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Action::RefreshHistory => self.refresh_history(ctx, true),
+            Action::RefreshModels => self.refresh_models(ctx),
+            Action::SetSkin(name) => {
+                self.skin_override = None;
+                self.config.skin = Some(name);
+                self.config.save();
+                self.apply_skin(ctx);
+            }
+            Action::ReloadSkins => {
+                (self.skins, self.skin_errors) = load_skins();
+                self.apply_skin(ctx);
+            }
+            Action::OpenSkinsFolder => {
+                if let Some(dir) = skin::shared_dir() {
+                    let _ = std::fs::create_dir_all(&dir);
+                    ctx.open_url(egui::OpenUrl::new_tab(format!("file://{}", dir.display())));
+                }
+            }
+            Action::SystemTitleBar(on) => {
+                self.config.system_title_bar = on;
+                self.config.save();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(on));
+            }
+        }
     }
+
+    /// The bottom of the window: the vim-style mode, and what's going on.
+    fn status_bar(&self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let v = ui.visuals();
+            let (text, bg, fg) = match self.edit_mode {
+                EditMode::Normal => (" NORMAL ", v.selection.bg_fill, v.selection.stroke.color),
+                EditMode::Insert => (" INSERT ", v.extreme_bg_color, v.text_color()),
+            };
+            ui.label(egui::RichText::new(text).monospace().strong().background_color(bg).color(fg));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some(error) = &self.models_error {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                } else if self.waiting_for_reply {
+                    ui.label(format!("Waiting for {}", self.selected_model));
+                    ui.add(egui::Spinner::new());
+                } else if self.history_rx.is_some() {
+                    ui.label("Fetching history");
+                    ui.add(egui::Spinner::new());
+                }
+            });
+        });
+    }
+
+    fn input_panel(&mut self, ui: &mut egui::Ui) {
+        let button_width = 80.0;
+        let height = 60.0;
+        ui.horizontal(|ui| {
+            let send_key = egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Enter);
+            let text_edit = ui.add_sized(
+                [ui.available_width() - button_width - ui.spacing().item_spacing.x, height],
+                egui::TextEdit::multiline(&mut self.input)
+                    .hint_text("Message (Enter sends, Shift+Enter for a new line)")
+                    // Shift+Enter adds a line; plain Enter sends, below.
+                    .return_key(egui::KeyboardShortcut::new(egui::Modifiers::SHIFT, egui::Key::Enter)),
+            );
+            match self.edit_mode {
+                EditMode::Insert => text_edit.request_focus(),
+                EditMode::Normal => {
+                    // Clicking the input box goes back to INSERT mode.
+                    if text_edit.has_focus() || text_edit.clicked() {
+                        self.edit_mode = EditMode::Insert;
+                    }
+                }
+            }
+            let enter = self.edit_mode == EditMode::Insert && ui.input_mut(|i| i.consume_shortcut(&send_key));
+            let can_send = !self.waiting_for_reply && !self.selected_model.is_empty() && !self.input.trim().is_empty();
+            let label = if self.waiting_for_reply { "…" } else { "Send" };
+            let send = ui.add_enabled(can_send, egui::Button::new(label).min_size(egui::vec2(button_width, height)));
+            if send.clicked() || enter {
+                self.send_message();
+            }
+        });
+    }
+
+    fn conversation(&mut self, ui: &mut egui::Ui) {
+        let mut scroll_area = egui::ScrollArea::vertical().auto_shrink(false);
+        if let Some(offset) = self.pending_scroll.take() {
+            scroll_area = scroll_area.vertical_scroll_offset(offset);
+        }
+        let output = scroll_area.show(ui, |ui| {
+            self.last_scroll_area_height = ui.clip_rect().height();
+            for message in &self.messages {
+                ui.group(|ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal_top(|ui| {
+                        if ui.button("Copy").on_hover_text("Copy the message's markdown").clicked() {
+                            ui.ctx().copy_text(message.content.clone());
+                        }
+                        ui.add_space(4.0);
+                        ui.vertical(|ui| {
+                            CommonMarkViewer::new().show(ui, &mut self.markdown_cache, &message.content);
+                        });
+                    });
+                });
+                ui.add_space(8.0);
+            }
+        });
+        self.current_scroll_offset = output.state.offset.y;
+    }
+
+    fn take_screenshot(&mut self, ctx: &egui::Context) {
+        let Some((path, requested)) = &mut self.screenshot else {
+            return;
+        };
+        ctx.request_repaint();
+        let image = ctx.input(|i| {
+            i.raw.events.iter().find_map(|e| match e {
+                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                _ => None,
+            })
+        });
+        if let Some(image) = image {
+            match crate::screenshot::save(&image, path) {
+                Ok(()) => eprintln!("saved {}", path.display()),
+                Err(e) => eprintln!("screenshot failed: {e}"),
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else if !*requested && ctx.input(|i| i.time) > 1.0 {
+            *requested = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+        }
+    }
+}
+
+impl eframe::App for App {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        self.receive();
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        self.handle_keys(&ctx);
+
+        // Every frame: Default's colours follow the desktop's light/dark setting.
+        let style = self.skin().frame_style(ui.visuals());
+        let custom = self.custom_frame();
+        let radius = if custom { frame::corner_radius(&ctx, style.radius) } else { 0 };
+
+        let mut actions = Vec::new();
+        let mut model = self.selected_model.clone();
+        egui::Panel::top("header").frame(frame::header_frame(ui.style(), &style, radius)).show(ui, |ui| {
+            TitleBar::new("MD-Chat", &style).custom(custom).menu_bar(true).show(
+                ui,
+                |ui| self.menus(ui, &mut actions),
+                |ui| model_picker(ui, &self.models, self.models_rx.is_some(), &mut model),
+            );
+        });
+        if model != self.selected_model {
+            self.config.model = Some(model.clone());
+            self.config.save();
+            self.selected_model = model;
+        }
+        for action in actions {
+            self.handle(&ctx, action);
+        }
+
+        // The status bar holds both bottom corners.
+        egui::Panel::bottom("status")
+            .frame(egui::Frame::side_top_panel(ui.style()).corner_radius(egui::CornerRadius {
+                sw: radius,
+                se: radius,
+                ..Default::default()
+            }))
+            .show(ui, |ui| self.status_bar(ui));
+        egui::Panel::bottom("input").show(ui, |ui| {
+            ui.add_space(4.0);
+            self.input_panel(ui);
+            ui.add_space(2.0);
+        });
+        egui::CentralPanel::default().show(ui, |ui| self.conversation(ui));
+
+        if custom {
+            frame::edges(&ctx, radius, style.border);
+        }
+        self.take_screenshot(&ctx);
+    }
+
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        frame::clear_color(visuals, self.custom_frame())
+    }
+
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        frame::release_grab(ctx, raw_input);
+    }
+}
+
+/// Right side of the title bar, next to the window buttons: the model that
+/// writes the replies, the app's output (laid out right to left).
+fn model_picker(ui: &mut egui::Ui, models: &[String], loading: bool, selected: &mut String) {
+    if models.is_empty() {
+        ui.label(if loading { "Loading models…" } else { "No models" });
+        return;
+    }
+    egui::ComboBox::from_id_salt("model").selected_text(selected.as_str()).show_ui(ui, |ui| {
+        for model in models {
+            ui.selectable_value(selected, model.clone(), model);
+        }
+    });
+    ui.label("Model");
+}
+
+/// Patina's built-ins and the shared skins folder.
+fn load_skins() -> (Vec<Skin>, Vec<String>) {
+    let dirs: Vec<_> = skin::shared_dir().into_iter().collect();
+    skin::load_all(skin::BUILT_IN, &dirs)
+}
+
+/// Lexend for text, with monochrome Noto Emoji as a fallback; code stays in
+/// egui's monospace font (ADR-0002).
+fn fonts() -> FontDefinitions {
+    let mut fonts = FontDefinitions::default();
+    let lexend = include_bytes!("../assets/Lexend-VariableFont_wght.ttf");
+    let emoji = include_bytes!("../assets/NotoEmoji-VariableFont_wght.ttf");
+    fonts.font_data.insert("lexend".into(), FontData::from_static(lexend).into());
+    fonts.font_data.insert("emoji".into(), FontData::from_static(emoji).into());
+    let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
+    proportional.insert(0, "lexend".into());
+    proportional.push("emoji".into());
+    fonts.families.entry(FontFamily::Monospace).or_default().push("emoji".into());
+    fonts
+}
+
+/// The conversation shown in screenshot mode.
+fn sample_conversation() -> Vec<ChatMessage> {
+    vec![
+        ChatMessage { role: Role::User, content: "Show me what markdown you can do.".into() },
+        ChatMessage { role: Role::Assistant, content: include_str!("../example.md").into() },
+    ]
 }
