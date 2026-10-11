@@ -38,6 +38,7 @@ enum Action {
     Quit,
     RefreshHistory,
     RefreshModels,
+    Export,
     SetSkin(String),
     ReloadSkins,
     OpenSkinsFolder,
@@ -62,6 +63,8 @@ pub struct App {
     selected_model: String,
     models_rx: Option<Receiver<Result<Vec<String>, String>>>,
     models_error: Option<String>,
+    /// What the last export did, for the status bar.
+    export_status: Option<Result<String, String>>,
     markdown_cache: CommonMarkCache,
     request_tx: Sender<(String, String)>,
     response_rx: Receiver<Result<String, String>>,
@@ -110,6 +113,7 @@ impl App {
             selected_model: String::new(),
             models_rx: None,
             models_error: None,
+            export_status: None,
             markdown_cache: CommonMarkCache::default(),
             request_tx,
             response_rx,
@@ -162,6 +166,25 @@ impl App {
         self.request_tx.send((text, self.selected_model.clone())).ok();
         self.waiting_for_reply = true;
         self.scroll_to_bottom();
+    }
+
+    /// Asks where to save, then writes the conversation there as CMF.
+    fn export(&mut self) {
+        if !crate::export::has_content(&self.messages) {
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Export as CMF")
+            .set_file_name(crate::export::file_name(&self.messages))
+            .add_filter("Conversational Markdown", &["cmf", "md"])
+            .save_file()
+        else {
+            return;
+        };
+        self.export_status = Some(match std::fs::write(&path, crate::export::to_cmf(&self.messages)) {
+            Ok(()) => Ok(format!("Exported to {}", path.display())),
+            Err(e) => Err(format!("Couldn't export to {}: {e}", path.display())),
+        });
     }
 
     fn refresh_models(&mut self, ctx: &egui::Context) {
@@ -307,6 +330,12 @@ impl App {
                 actions.push(Action::RefreshHistory);
                 ui.close();
             }
+            let can_export = crate::export::has_content(&self.messages);
+            if ui.add_enabled(can_export, egui::Button::new("Export as CMF…").shortcut_text("Ctrl+E")).clicked() {
+                actions.push(Action::Export);
+                ui.close();
+            }
+            ui.separator();
             if ui.button("Refresh Models").clicked() {
                 actions.push(Action::RefreshModels);
                 ui.close();
@@ -349,6 +378,7 @@ impl App {
             Action::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Action::RefreshHistory => self.refresh_history(ctx, true),
             Action::RefreshModels => self.refresh_models(ctx),
+            Action::Export => self.export(),
             Action::SetSkin(name) => {
                 self.skin_override = None;
                 self.config.skin = Some(name);
@@ -391,6 +421,11 @@ impl App {
                 } else if self.history_rx.is_some() {
                     ui.label("Fetching history");
                     ui.add(egui::Spinner::new());
+                } else if let Some(status) = &self.export_status {
+                    match status {
+                        Ok(done) => ui.label(done),
+                        Err(error) => ui.colored_label(ui.visuals().error_fg_color, error),
+                    };
                 }
             });
         });
@@ -484,6 +519,9 @@ impl eframe::App for App {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::E)) {
+            self.export();
+        }
         self.handle_keys(&ctx);
 
         // Every frame: Default's colours follow the desktop's light/dark setting.
@@ -493,13 +531,23 @@ impl eframe::App for App {
 
         let mut actions = Vec::new();
         let mut model = self.selected_model.clone();
+        let mut export_clicked = false;
         egui::Panel::top("header").frame(frame::header_frame(ui.style(), &style, radius)).show(ui, |ui| {
             TitleBar::new("MD-Chat", &style).custom(custom).menu_bar(true).show(
                 ui,
                 |ui| self.menus(ui, &mut actions),
-                |ui| model_picker(ui, &self.models, self.models_rx.is_some(), &mut model),
+                |ui| {
+                    // Right to left: Export by the window buttons, then the model.
+                    let can_export = crate::export::has_content(&self.messages);
+                    let export = ui.add_enabled(can_export, egui::Button::new("Export"));
+                    export_clicked = export.on_hover_text("Save the conversation as CMF (Ctrl+E)").clicked();
+                    model_picker(ui, &self.models, self.models_rx.is_some(), &mut model);
+                },
             );
         });
+        if export_clicked {
+            actions.push(Action::Export);
+        }
         if model != self.selected_model {
             self.config.model = Some(model.clone());
             self.config.save();
@@ -539,8 +587,8 @@ impl eframe::App for App {
     }
 }
 
-/// Right side of the title bar, next to the window buttons: the model that
-/// writes the replies, the app's output (laid out right to left).
+/// On the right of the title bar: the model that writes the replies, the
+/// app's output.
 fn model_picker(ui: &mut egui::Ui, models: &[String], loading: bool, selected: &mut String) {
     if models.is_empty() {
         ui.label(if loading { "Loading models…" } else { "No models" });

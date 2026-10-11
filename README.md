@@ -17,6 +17,8 @@ the other Sector F apps.
   more built in, or your own in `~/.config/patina/skins/`)
 - Vim-style modal keys for reading long conversations
 - History from a local Reservoir
+- Export a conversation to [CMF](https://sectorflabs.com/cmf/), the Conversational Markdown
+  Format, with the Export button or File → Export as CMF… (Ctrl+E)
 
 ## Configuration
 
@@ -54,6 +56,7 @@ The current mode is shown in the status bar.
 | `Shift+J` / `Shift+K` | Scroll down / up one window height |
 | `g` / `G` | Jump to the top / bottom |
 | `r` | Refresh history from Reservoir |
+| `Ctrl+E` | Export the conversation as CMF (any mode) |
 | `Ctrl+Q` | Quit (any mode) |
 
 ## Build

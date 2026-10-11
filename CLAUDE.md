@@ -25,9 +25,10 @@ before moving egui.
 ## Layout
 
 - `src/main.rs`: viewport (Patina frame, app id `com.sectorflabs.MdChat`, icon).
-- `src/app.rs`: window, header menus and model picker, conversation, input, status bar, modal
+- `src/app.rs`: window, header menus, model picker and Export button, conversation, input, status bar, modal
   keys, screenshot mode (`MDCHAT_SCREENSHOT`, `MDCHAT_SKIN`).
 - `src/config.rs`: `config.toml`, the Ollama default and the migration from the old default.
 - `src/openai.rs`: chat completions and the `/v1/models` list.
+- `src/export.rs`: the conversation as CMF, through the reference `cmf` crate (ADR-0004).
 - `src/history.rs`: history from a local Reservoir (localhost:3017).
 - `src/screenshot.rs`: saves the screenshot PNG.

@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 mod app;
 mod config;
+mod export;
 mod history;
 mod openai;
 mod screenshot;

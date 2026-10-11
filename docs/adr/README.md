@@ -45,6 +45,7 @@ mechanics of adding one.
 | [0001](0001-build-on-patina.md) | Port MD-Chat onto Patina | Accepted |
 | [0002](0002-lexend-for-text-stock-monospace-for-code.md) | Lexend for text, stock monospace for code | Proposed |
 | [0003](0003-ollama-by-default-models-from-the-api.md) | Ollama by default, models from the API | Accepted |
+| [0004](0004-export-conversations-as-cmf.md) | Export conversations as CMF | Accepted |
 
 ## Decision Relationship
 
@@ -52,6 +53,7 @@ mechanics of adding one.
 flowchart TD
     A[0001: port onto Patina] --> B[0002: Lexend for text, stock monospace for code]
     A --> C[0003: Ollama by default, models from the API]
+    A --> D[0004: export conversations as CMF]
 ```
 
 ## Revisit Triggers
