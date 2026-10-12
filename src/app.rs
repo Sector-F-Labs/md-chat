@@ -7,6 +7,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use egui::{FontData, FontDefinitions, FontFamily};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use patina::frame::{self, TitleBar};
+use patina::ime;
 use patina::skin::{self, Skin};
 use serde::{Deserialize, Serialize};
 
@@ -452,7 +453,10 @@ impl App {
                     .return_key(egui::KeyboardShortcut::new(egui::Modifiers::SHIFT, egui::Key::Enter)),
             );
             match self.edit_mode {
-                EditMode::Insert => text_edit.request_focus(),
+                // Only when it's lost: each request interrupts the IME, which on
+                // Wayland answers with an event, and so another frame.
+                EditMode::Insert if !text_edit.has_focus() => text_edit.request_focus(),
+                EditMode::Insert => {}
                 EditMode::Normal => {
                     // Clicking the input box goes back to INSERT mode.
                     if text_edit.has_focus() || text_edit.clicked() {
@@ -534,6 +538,7 @@ impl eframe::App for App {
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         frame::release_grab(ctx, raw_input);
+        ime::drop_repeated_preedits(ctx, raw_input);
     }
 }
 
