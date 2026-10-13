@@ -399,7 +399,7 @@ impl App {
                 self.apply_skin(ctx);
             }
             Action::OpenSkinsFolder => {
-                if let Some(dir) = skin::shared_dir() {
+                if let Some(dir) = skin::app_dir("MD-Chat") {
                     let _ = std::fs::create_dir_all(&dir);
                     let _ = patina::open::path(&dir);
                 }
@@ -624,9 +624,9 @@ fn model_picker(ui: &mut egui::Ui, models: &[String], loading: bool, selected: &
     ui.label("Model");
 }
 
-/// Patina's built-ins and the shared skins folder.
+/// Patina's built-ins and MD-Chat's own skins folder.
 fn load_skins() -> (Vec<Skin>, Vec<String>) {
-    let dirs: Vec<_> = skin::shared_dir().into_iter().collect();
+    let dirs: Vec<_> = skin::app_dir("MD-Chat").into_iter().collect();
     skin::load_all(skin::BUILT_IN, &dirs)
 }
 

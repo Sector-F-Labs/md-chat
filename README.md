@@ -14,7 +14,7 @@ the other Sector F apps.
 - The model picker lists only the models the API actually has
 - Full markdown rendering, with syntax-highlighted code blocks
 - Patina skins (Default follows the desktop's light/dark setting; Dark Orange, Steam Classic and
-  more built in, or your own in `~/.config/patina/skins/`)
+  more built in, or your own in `~/.config/MD-Chat/skins/`)
 - Vim-style modal keys for reading long conversations
 - History from a local Reservoir
 - Export a conversation to [CMF](https://sectorflabs.com/cmf/), the Conversational Markdown
