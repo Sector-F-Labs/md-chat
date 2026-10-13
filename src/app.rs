@@ -401,7 +401,7 @@ impl App {
             Action::OpenSkinsFolder => {
                 if let Some(dir) = skin::shared_dir() {
                     let _ = std::fs::create_dir_all(&dir);
-                    ctx.open_url(egui::OpenUrl::new_tab(format!("file://{}", dir.display())));
+                    let _ = patina::open::path(&dir);
                 }
             }
             Action::SystemTitleBar(on) => {
